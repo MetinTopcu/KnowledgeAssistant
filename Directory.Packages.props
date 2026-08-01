@@ -33,9 +33,28 @@
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.1" />
     <PackageVersion Include="Azure.Search.Documents" Version="12.0.0" />
+    <PackageVersion Include="Azure.AI.DocumentIntelligence" Version="1.0.0" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
     <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.14.0" />
+  </ItemGroup>
+
+  <!--
+    NOTE ON PACKAGE IDENTITY: the package id is "PdfPig"; "UglyToad.PdfPig" is
+    the *namespace*. A package published under the namespace-shaped id also
+    exists on nuget.org, with no project URL, an authors field that merely
+    repeats its own id, and a "-custom" version suffix. It is not the library
+    maintained at github.com/UglyToad/PdfPig. Referencing the namespace by
+    mistake is exactly the substitution NuGet.config's source mapping is meant
+    to make hard, so the correct id is recorded here explicitly.
+
+    Apache-2.0, consistent with this solution's preference for permissively
+    licensed dependencies. The obvious alternative, iText, is AGPL — which would
+    oblige this service's source to be offered to every user of it, or a
+    commercial licence to be bought.
+  -->
+  <ItemGroup Label="Infrastructure — Document processing">
+    <PackageVersion Include="PdfPig" Version="0.1.15" />
   </ItemGroup>
 
   <!--

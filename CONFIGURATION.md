@@ -122,7 +122,10 @@ everywhere.
 | `Azure:Search:IndexName` | `Azure__Search__IndexName` |
 | `Azure:AiFoundry:Endpoint` | `Azure__AiFoundry__Endpoint` |
 | `Azure:AiFoundry:ChatDeploymentName` | `Azure__AiFoundry__ChatDeploymentName` |
+| `Azure:DocumentIntelligence:Endpoint` | `Azure__DocumentIntelligence__Endpoint` |
 | `Azure:Credential:ManagedIdentityClientId` | `Azure__Credential__ManagedIdentityClientId` |
+| `Chunking:MaxChunkSize` | `Chunking__MaxChunkSize` |
+| `Chunking:OverlapSize` | `Chunking__OverlapSize` |
 | *(host)* | `ASPNETCORE_ENVIRONMENT=Production` |
 
 ### App Service / Container Apps
@@ -164,6 +167,7 @@ source of `403`s.
 | AI Search | `Search Index Data Contributor` (read/write documents) |
 | AI Search | `Search Service Contributor` (create/update the index) |
 | AI Foundry / OpenAI | `Cognitive Services OpenAI User` |
+| Document Intelligence | `Cognitive Services User` *(only if an endpoint is configured)* |
 | Key Vault | `Key Vault Secrets User` |
 
 Grant the same roles to each developer's own account for local development.

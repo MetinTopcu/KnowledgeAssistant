@@ -20,9 +20,19 @@
     <PackageReference Include="Azure.Identity" />
     <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Azure.Search.Documents" />
+    <PackageReference Include="Azure.AI.DocumentIntelligence" />
     <PackageReference Include="Azure.AI.OpenAI" />
     <PackageReference Include="Azure.AI.Projects" />
     <PackageReference Include="Microsoft.Extensions.Azure" />
+  </ItemGroup>
+
+  <!--
+    Local PDF text extraction, used when Document Intelligence is not
+    configured. Managed code with no native binaries, so it runs unchanged on a
+    Linux container and a Windows laptop.
+  -->
+  <ItemGroup Label="Document processing">
+    <PackageReference Include="PdfPig" />
   </ItemGroup>
 
   <ItemGroup Label="Hosting primitives">

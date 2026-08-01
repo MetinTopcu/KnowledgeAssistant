@@ -1,3 +1,4 @@
+using Azure.AI.DocumentIntelligence;
 using Azure.Core;
 using Azure.Identity;
 using Azure.Search.Documents;
@@ -5,7 +6,9 @@ using Azure.Search.Documents.Indexes;
 using KnowledgeAssistant.Application.Interfaces;
 using KnowledgeAssistant.Infrastructure.Azure.Blob;
 using KnowledgeAssistant.Infrastructure.Azure.Common;
+using KnowledgeAssistant.Infrastructure.Azure.DocumentIntelligence;
 using KnowledgeAssistant.Infrastructure.Search;
+using KnowledgeAssistant.Infrastructure.Search.Chunking;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,6 +51,7 @@ public static class InfrastructureServiceRegistration
 
         services.AddBlobStorage(configuration, credential);
         services.AddAzureSearch(configuration, credential);
+        services.AddDocumentChunking(configuration, credential);
 
         return services;
     }
@@ -190,6 +194,85 @@ public static class InfrastructureServiceRegistration
         // thread-safe and expensive to construct, and the index-existence cache
         // depends on this lifetime.
         services.AddSingleton<IAzureSearchService, AzureSearchService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the chunking service and the text extractor behind it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The extractor is chosen here, once, rather than per call.</b> Whether
+    /// Document Intelligence is available is a fact about the deployment, not
+    /// about any individual document, so resolving it at registration means the
+    /// running system has exactly one extraction path and the container states
+    /// which one it is.
+    /// </para>
+    /// <para>
+    /// <b>There is deliberately no runtime fallback.</b> Silently dropping to
+    /// local extraction when a configured endpoint misbehaves would fill one
+    /// corpus with documents processed by two engines of different capability —
+    /// scans readable or unreadable depending on the weather — with nothing
+    /// recording which produced what. A configured endpoint that fails is an
+    /// incident, and it is reported as one.
+    /// </para>
+    /// </remarks>
+    private static IServiceCollection AddDocumentChunking(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        DefaultAzureCredential credential)
+    {
+        services
+            .AddOptions<ChunkingOptions>()
+            .Bind(configuration.GetSection(ChunkingOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        services
+            .AddOptions<DocumentIntelligenceOptions>()
+            .Bind(configuration.GetSection(DocumentIntelligenceOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        DocumentIntelligenceOptions options =
+            configuration.GetSection(DocumentIntelligenceOptions.SectionName).Get<DocumentIntelligenceOptions>()
+            ?? new DocumentIntelligenceOptions();
+
+        if (options.IsConfigured)
+        {
+            services.AddAzureClients(clientBuilder =>
+            {
+                clientBuilder.AddClient<DocumentIntelligenceClient, DocumentIntelligenceClientOptions>(
+                    (clientOptions, factoryCredential) =>
+                    {
+                        // Analysis is a long-running operation the SDK polls, so a
+                        // generous network timeout here is about each individual
+                        // poll, not about the overall wait. The retry budget stays
+                        // in line with the other adapters.
+                        clientOptions.Retry.MaxRetries = 3;
+                        clientOptions.Retry.Mode = RetryMode.Exponential;
+                        clientOptions.Retry.Delay = TimeSpan.FromMilliseconds(500);
+                        clientOptions.Retry.MaxDelay = TimeSpan.FromSeconds(5);
+                        clientOptions.Retry.NetworkTimeout = TimeSpan.FromSeconds(60);
+
+                        return new DocumentIntelligenceClient(
+                            ResolveEndpoint(options.Endpoint),
+                            factoryCredential,
+                            clientOptions);
+                    });
+
+                clientBuilder.UseCredential(credential);
+            });
+
+            services.AddSingleton<IPdfTextExtractor, DocumentIntelligenceTextExtractor>();
+        }
+        else
+        {
+            services.AddSingleton<IPdfTextExtractor, PdfPigTextExtractor>();
+        }
+
+        services.AddSingleton<IDocumentChunkingService, DocumentChunkingService>();
 
         return services;
     }
