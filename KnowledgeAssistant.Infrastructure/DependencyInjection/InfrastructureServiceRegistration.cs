@@ -1,7 +1,11 @@
 using Azure.Core;
+using Azure.Identity;
+using Azure.Search.Documents;
+using Azure.Search.Documents.Indexes;
 using KnowledgeAssistant.Application.Interfaces;
 using KnowledgeAssistant.Infrastructure.Azure.Blob;
 using KnowledgeAssistant.Infrastructure.Azure.Common;
+using KnowledgeAssistant.Infrastructure.Search;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,7 +36,18 @@ public static class InfrastructureServiceRegistration
         ArgumentNullException.ThrowIfNull(configuration);
 
         services.AddAzureCredential(configuration);
-        services.AddBlobStorage(configuration);
+
+        // Built once and shared by every client registration below. A second
+        // instance would mean a second token cache and a duplicate round trip to
+        // Entra ID for a token the first one already holds.
+        AzureCredentialOptions credentialOptions =
+            configuration.GetSection(AzureCredentialOptions.SectionName).Get<AzureCredentialOptions>()
+            ?? new AzureCredentialOptions();
+
+        DefaultAzureCredential credential = AzureCredentialFactory.Create(credentialOptions);
+
+        services.AddBlobStorage(configuration, credential);
+        services.AddAzureSearch(configuration, credential);
 
         return services;
     }
@@ -58,7 +73,8 @@ public static class InfrastructureServiceRegistration
 
     private static IServiceCollection AddBlobStorage(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        DefaultAzureCredential credential)
     {
         // ValidateOnStart is the point of this block. Without it, a missing
         // ServiceUri surfaces as a NullReferenceException on the first upload —
@@ -76,14 +92,6 @@ public static class InfrastructureServiceRegistration
         BlobStorageOptions options =
             configuration.GetSection(BlobStorageOptions.SectionName).Get<BlobStorageOptions>()
             ?? new BlobStorageOptions();
-
-        // Read from Azure:Credential — the section appsettings.json and
-        // CONFIGURATION.md have always documented. Read directly rather than
-        // resolved from DI because UseCredential runs during registration, before
-        // any service provider exists to resolve IOptions from.
-        AzureCredentialOptions credentialOptions =
-            configuration.GetSection(AzureCredentialOptions.SectionName).Get<AzureCredentialOptions>()
-            ?? new AzureCredentialOptions();
 
         services.AddAzureClients(clientBuilder =>
         {
@@ -112,12 +120,76 @@ public static class InfrastructureServiceRegistration
             // resolves to the developer's own identity locally (Azure CLI,
             // Visual Studio) and to the managed identity in Azure — so the same
             // code path runs in both, and no key ever exists to be leaked.
-            clientBuilder.UseCredential(AzureCredentialFactory.Create(credentialOptions));
+            clientBuilder.UseCredential(credential);
         });
 
         // Singleton: see BlobStorageService's remarks. The container-existence
         // cache and the pooled BlobServiceClient both depend on this lifetime.
         services.AddSingleton<IBlobStorageService, BlobStorageService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the Azure AI Search client and the indexing adapter.
+    /// </summary>
+    private static IServiceCollection AddAzureSearch(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        DefaultAzureCredential credential)
+    {
+        // Same contract as blob storage: a missing endpoint fails the deployment
+        // at startup with a message naming the setting, rather than surfacing as
+        // an obscure failure on the first upload that reaches indexing.
+        services
+            .AddOptions<AzureSearchOptions>()
+            .Bind(configuration.GetSection(AzureSearchOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        AzureSearchOptions options =
+            configuration.GetSection(AzureSearchOptions.SectionName).Get<AzureSearchOptions>()
+            ?? new AzureSearchOptions();
+
+        services.AddAzureClients(clientBuilder =>
+        {
+            // The generic AddClient overload: Microsoft.Extensions.Azure ships
+            // first-class extensions for Blob and Key Vault but none for Search,
+            // so the client is constructed here. Taking the credential from the
+            // factory's own parameter — rather than closing over one — is what
+            // guarantees this client uses the same credential as every other.
+            clientBuilder.AddClient<SearchIndexClient, SearchClientOptions>(
+                (clientOptions, factoryCredential) =>
+                {
+                    // Matches the blob tuning and for the same reason: the SDK
+                    // default of 5 retries with a long backoff is tuned for
+                    // background work, and would leave a caller waiting most of a
+                    // minute to learn that search is down. A user-facing request
+                    // should fail while someone is still waiting for it.
+                    clientOptions.Retry.MaxRetries = 3;
+                    clientOptions.Retry.Mode = RetryMode.Exponential;
+                    clientOptions.Retry.Delay = TimeSpan.FromMilliseconds(200);
+                    clientOptions.Retry.MaxDelay = TimeSpan.FromSeconds(2);
+                    clientOptions.Retry.NetworkTimeout = TimeSpan.FromSeconds(30);
+
+                    return new SearchIndexClient(
+                        ResolveEndpoint(options.Endpoint),
+                        factoryCredential,
+                        clientOptions);
+                });
+
+            // Repeated deliberately. UseCredential applies to the builder it is
+            // called on, and this is a separate AddAzureClients block from the
+            // blob one; relying on the two to share state would make the search
+            // client's authentication depend on registration order. The credential
+            // instance itself is shared, so this costs nothing.
+            clientBuilder.UseCredential(credential);
+        });
+
+        // Singleton for the same reasons as the blob adapter: the SDK clients are
+        // thread-safe and expensive to construct, and the index-existence cache
+        // depends on this lifetime.
+        services.AddSingleton<IAzureSearchService, AzureSearchService>();
 
         return services;
     }
@@ -133,7 +205,10 @@ public static class InfrastructureServiceRegistration
     /// service registration with no indication of the cause.
     /// </remarks>
     private static Uri ResolveServiceUri(BlobStorageOptions options) =>
-        Uri.TryCreate(options.ServiceUri, UriKind.Absolute, out Uri? serviceUri)
-            ? serviceUri
+        ResolveEndpoint(options.ServiceUri);
+
+    private static Uri ResolveEndpoint(string configuredEndpoint) =>
+        Uri.TryCreate(configuredEndpoint, UriKind.Absolute, out Uri? endpoint)
+            ? endpoint
             : new Uri("https://unconfigured.invalid/");
 }

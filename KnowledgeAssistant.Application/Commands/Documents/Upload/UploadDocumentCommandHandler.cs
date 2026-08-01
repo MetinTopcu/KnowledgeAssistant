@@ -4,6 +4,7 @@ using KnowledgeAssistant.Application.Abstractions;
 using KnowledgeAssistant.Application.Common;
 using KnowledgeAssistant.Application.Interfaces;
 using KnowledgeAssistant.Domain.Common;
+using Microsoft.Extensions.Logging;
 
 namespace KnowledgeAssistant.Application.Commands.Documents.Upload;
 
@@ -38,7 +39,30 @@ namespace KnowledgeAssistant.Application.Commands.Documents.Upload;
 /// assembly scanning sees internal types.
 /// </para>
 /// </remarks>
-internal sealed class UploadDocumentCommandHandler
+/// <remarks>
+/// <para>
+/// <b>Why the two steps are not atomic, and why that is the right trade.</b>
+/// Sprint 4 makes the use case span two external systems, and no transaction
+/// spans Blob Storage and AI Search. A failure between them therefore leaves the
+/// bytes stored with no index entry.
+/// </para>
+/// <para>
+/// That direction of inconsistency is chosen deliberately. The index is a
+/// derived, rebuildable projection — a query accelerator, not the state of
+/// record — so a stored blob missing from the index can always be re-indexed
+/// from storage. The reverse, an index entry pointing at bytes that were never
+/// written, is unrecoverable and would surface to users as a search hit that
+/// 404s. When the two cannot be made consistent, fail towards the one that can
+/// be repaired.
+/// </para>
+/// <para>
+/// The orphan is logged with its blob name so a reconciliation pass can find it.
+/// Deleting the blob to compensate was rejected: it would add a destructive
+/// operation to the storage port, and a delete that itself fails leaves the same
+/// problem plus a partially-executed rollback.
+/// </para>
+/// </remarks>
+internal sealed partial class UploadDocumentCommandHandler
     : ICommandHandler<UploadDocumentCommand, UploadDocumentResponse>
 {
     /// <summary>
@@ -60,17 +84,23 @@ internal sealed class UploadDocumentCommandHandler
 
     private readonly IValidator<UploadDocumentCommand> _validator;
     private readonly IBlobStorageService _blobStorageService;
+    private readonly IAzureSearchService _searchService;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<UploadDocumentCommandHandler> _logger;
 
     /// <summary>Initialises the handler.</summary>
     public UploadDocumentCommandHandler(
         IValidator<UploadDocumentCommand> validator,
         IBlobStorageService blobStorageService,
-        TimeProvider timeProvider)
+        IAzureSearchService searchService,
+        TimeProvider timeProvider,
+        ILogger<UploadDocumentCommandHandler> logger)
     {
         _validator = validator;
         _blobStorageService = blobStorageService;
+        _searchService = searchService;
         _timeProvider = timeProvider;
+        _logger = logger;
     }
 
     /// <summary>Validates the command and returns the acceptance confirmation.</summary>
@@ -108,6 +138,32 @@ internal sealed class UploadDocumentCommandHandler
             return Result.Failure<UploadDocumentResponse>(uploadResult.Error);
         }
 
+        // Read once and used for both the indexed value and the response, so the
+        // two can never disagree about when this document was accepted. Two reads
+        // of the clock would differ by however long indexing took.
+        DateTimeOffset receivedAtUtc = _timeProvider.GetUtcNow();
+
+        Result indexResult = await _searchService
+            .IndexDocumentAsync(
+                new DocumentIndexRequest(
+                    DocumentId: documentId,
+                    BlobName: uploadResult.Value.BlobName,
+                    OriginalFileName: request.FileName,
+                    BlobUri: uploadResult.Value.BlobUri,
+                    UploadedAt: receivedAtUtc),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (indexResult.IsFailure)
+        {
+            // The upload is reported as failed because the document is not fully
+            // ingested — it cannot be found. The blob survives, so this line is
+            // what makes it recoverable rather than lost.
+            LogIndexingLeftOrphanedBlob(documentId, uploadResult.Value.BlobName, indexResult.Error.Code);
+
+            return Result.Failure<UploadDocumentResponse>(indexResult.Error);
+        }
+
         return new UploadDocumentResponse(
             DocumentId: documentId,
             FileName: request.FileName,
@@ -115,6 +171,13 @@ internal sealed class UploadDocumentCommandHandler
             // The measured size from storage, not the client's declared length.
             SizeInBytes: uploadResult.Value.SizeInBytes,
             BlobName: uploadResult.Value.BlobName,
-            ReceivedAtUtc: _timeProvider.GetUtcNow());
+            ReceivedAtUtc: receivedAtUtc);
     }
+
+    [LoggerMessage(
+        EventId = 3000,
+        Level = LogLevel.Error,
+        Message = "Document {DocumentId} was stored as {BlobName} but indexing failed with {ErrorCode}. " +
+                  "The blob is orphaned and must be re-indexed or removed.")]
+    private partial void LogIndexingLeftOrphanedBlob(Guid documentId, string blobName, string errorCode);
 }
