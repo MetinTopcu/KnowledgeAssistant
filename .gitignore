@@ -361,3 +361,45 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ══════════════════════════════════════════════════════════════════════
+# KnowledgeAssistant — secrets and local configuration
+#
+# Everything above this line is the stock VisualStudio.gitignore. The rules
+# below are the ones that keep credentials out of history. Note that git
+# only ignores files it is not ALREADY tracking: if a secret has ever been
+# committed, adding it here hides it from `git status` while leaving it in
+# history. In that case rotate the credential first — it must be treated as
+# compromised — then purge it from history.
+# ══════════════════════════════════════════════════════════════════════
+
+# User Secrets
+# Real user secrets live OUTSIDE the repo, at
+#   %APPDATA%\Microsoft\UserSecrets\<UserSecretsId>\secrets.json
+# so they are unreachable by git by construction. This entry is belt-and-braces
+# against anyone creating a secrets.json inside the working tree by hand.
+secrets.json
+
+# Environment
+.env
+.env.*
+
+# App Settings — local-only overrides.
+# The committed templates are the *.example.json files, which must never
+# contain a real value. See CONFIGURATION.md.
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.Local.json
+
+# Azure Functions / Azurite local settings (contains connection strings)
+local.settings.json
+
+# Rider
+.idea/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

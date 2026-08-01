@@ -1,13 +1,27 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+  <!--
+    APPLICATION — use-case orchestration (CQRS).
 
+    Depends on Domain only. It declares the outbound ports it needs
+    (Interfaces/) but never learns who implements them. Note that the packages
+    below are all abstraction-only: DI and Logging *.Abstractions, never the
+    concrete hosting types. That keeps this layer host-agnostic and trivially
+    unit-testable without a WebApplicationFactory.
+
+    TargetFramework / Nullable / ImplicitUsings are inherited from
+    Directory.Build.props at the repo root.
+  -->
   <ItemGroup>
     <ProjectReference Include="..\KnowledgeAssistant.Domain\KnowledgeAssistant.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MediatR" />
+    <PackageReference Include="FluentValidation" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
 </Project>

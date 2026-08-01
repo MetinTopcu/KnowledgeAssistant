@@ -1,23 +1,39 @@
+using KnowledgeAssistant.Api.Extensions;
+using KnowledgeAssistant.Application.DependencyInjection;
+using KnowledgeAssistant.Infrastructure.DependencyInjection;
+using Serilog;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// Reads the "Serilog" section already present in appsettings.json, so logging is
+// configured by deployment rather than by code.
+builder.Services.AddSerilog((services, configuration) => configuration
+    .ReadFrom.Configuration(builder.Configuration)
+    .ReadFrom.Services(services));
 
-builder.Services.AddControllers();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddApiServices();
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
+// Replaces the framework's per-request log noise with one enriched completion
+// line carrying method, path, status, and elapsed time.
+app.UseSerilogRequestLogging();
 
-app.UseAuthorization();
+app.UseHttpsRedirection();
 
 app.MapControllers();
 
-app.Run();
+await app.RunAsync().ConfigureAwait(false);
+
+// Exposed so an integration-test project can drive this host through
+// WebApplicationFactory<Program>, which requires a nameable entry-point type.
+/// <summary>The application entry point.</summary>
+public partial class Program;

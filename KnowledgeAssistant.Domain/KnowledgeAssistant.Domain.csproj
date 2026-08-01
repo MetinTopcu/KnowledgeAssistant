@@ -1,9 +1,12 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+  <!--
+    DOMAIN — the centre of the dependency graph.
+
+    Deliberately empty of references. No project references, no NuGet packages,
+    not even Microsoft.Extensions.*. If this file ever grows an <ItemGroup>,
+    that is a design smell worth a code review conversation: it means a
+    framework or vendor concern has leaked into the enterprise model.
+  -->
 
 </Project>

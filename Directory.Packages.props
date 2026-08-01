@@ -1,0 +1,65 @@
+<Project>
+
+  <!--
+    Central Package Management (CPM).
+
+    Every version in the solution is declared exactly once, here. Projects
+    reference packages by name only. This removes the single most common source
+    of enterprise dependency drift: two projects silently binding different
+    versions of the same assembly.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <!--
+    Application layer.
+
+    NOTE ON MediatR LICENSING: 12.4.1 is the last Apache-2.0 release. Version 13
+    and later ship a proprietary LICENSE.md and require a paid commercial
+    licence above a revenue threshold. This scaffold pins the OSS release
+    deliberately. Moving to 14.x is a procurement decision, not a version bump.
+  -->
+  <ItemGroup Label="Application">
+    <PackageVersion Include="MediatR" Version="12.4.1" />
+    <PackageVersion Include="FluentValidation" Version="12.1.1" />
+    <PackageVersion Include="FluentValidation.DependencyInjectionExtensions" Version="12.1.1" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup Label="Infrastructure — Azure">
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.1" />
+    <PackageVersion Include="Azure.Search.Documents" Version="12.0.0" />
+    <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
+    <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.14.0" />
+  </ItemGroup>
+
+  <!--
+    The Microsoft.Extensions.* family is pinned to 10.0.x even though the apps
+    target net9.0. These packages multi-target and run happily on net9.0; the
+    10.x floor is forced transitively by Microsoft.Extensions.Azure and
+    Serilog.AspNetCore. Pinning them explicitly (rather than letting NuGet
+    resolve) is what CentralPackageTransitivePinningEnabled is for: one version
+    of each assembly across the whole solution, chosen by us, not inferred.
+
+    Microsoft.AspNetCore.* is the exception — it stays on 9.0.x because
+    ASP.NET Core packages are framework-bound and 10.x requires net10.0.
+  -->
+  <ItemGroup Label="Infrastructure — Hosting primitives">
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
+    <!-- Supplies OptionsBuilder.ValidateDataAnnotations, which drives ValidateOnStart. -->
+    <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup Label="Api">
+    <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="9.0.18" />
+  </ItemGroup>
+
+</Project>

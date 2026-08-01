@@ -1,0 +1,22 @@
+root = true
+
+[*.cs]
+
+# ── Analyzer decisions ────────────────────────────────────────────────
+#
+# Deliberate, documented suppressions only. Anything switched off here needs a
+# reason a reviewer can challenge — an undocumented `severity = none` is how a
+# ruleset quietly stops meaning anything.
+
+# CA1716: Identifiers should not match keywords.
+#
+# Triggered by Domain.Common.Error, which collides with the VB `Error`
+# statement. The rule exists to protect libraries consumed from other .NET
+# languages; this is an internal application with no VB consumer and no
+# published package.
+#
+# `Error` is the established name for this type across the Result-pattern
+# literature, and it pairs with `Result` in a way `ResultError` or `Failure`
+# does not. Renaming a core domain primitive to satisfy an interop concern that
+# does not apply here would trade daily readability for nothing.
+dotnet_diagnostic.CA1716.severity = none

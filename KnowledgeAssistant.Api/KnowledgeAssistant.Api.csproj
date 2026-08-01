@@ -1,18 +1,42 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
+  <!--
+    Links this project to a secrets store OUTSIDE the repository, at
+    %APPDATA%\Microsoft\UserSecrets\<UserSecretsId>\secrets.json.
+
+    The ID is not a secret and is meant to be committed — it is only a folder
+    name. The values it points at never enter the working tree, which is what
+    makes local development credential-safe by construction rather than by
+    remembering to gitignore something.
+
+    Active in the Development environment only; in production the same
+    configuration keys are supplied by environment variables. See
+    CONFIGURATION.md.
+  -->
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>374251c9-201f-46f8-8830-b3c3e86f8e50</UserSecretsId>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.18" />
-  </ItemGroup>
+  <!--
+    API — the composition root and HTTP delivery mechanism.
 
+    It references Infrastructure for exactly one reason: Program.cs must call
+    AddInfrastructure() to bind the adapters. That is the accepted Clean
+    Architecture compromise — the outermost layer wires the graph.
+
+    The discipline that keeps it honest: no file in this project outside
+    Extensions/ may reference an Infrastructure *type*. Controllers depend on
+    MediatR and Application DTOs only. See ARCHITECTURE.md for the fitness
+    test that enforces this once you add a test project.
+  -->
   <ItemGroup>
     <ProjectReference Include="..\KnowledgeAssistant.Application\KnowledgeAssistant.Application.csproj" />
     <ProjectReference Include="..\KnowledgeAssistant.Infrastructure\KnowledgeAssistant.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
   </ItemGroup>
 
 </Project>
