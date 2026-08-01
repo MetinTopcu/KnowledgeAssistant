@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    UNIT TESTS — every layer, no network, no Azure.
+
+    Adapters are exercised against faked SDK clients rather than live services,
+    so the suite runs offline in milliseconds and asserts behaviour that a live
+    service would make expensive or impossible to provoke: a 429 followed by a
+    success, a response whose vector count disagrees with its input, a
+    Retry-After header of an hour.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\KnowledgeAssistant.Application\KnowledgeAssistant.Application.csproj" />
+    <ProjectReference Include="..\..\KnowledgeAssistant.Domain\KnowledgeAssistant.Domain.csproj" />
+    <ProjectReference Include="..\..\KnowledgeAssistant.Infrastructure\KnowledgeAssistant.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

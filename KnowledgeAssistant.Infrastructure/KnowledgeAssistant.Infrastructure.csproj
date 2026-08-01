@@ -11,6 +11,12 @@
     It references Application (to implement its interfaces) and Domain (its
     repositories return entities). It must never be referenced *by* Application.
   -->
+  <!-- See the Application project for why the adapters are internal and tested. -->
+  <ItemGroup Label="Test visibility">
+    <InternalsVisibleTo Include="KnowledgeAssistant.Tests.Unit" />
+    <InternalsVisibleTo Include="KnowledgeAssistant.Tests.Integration" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\KnowledgeAssistant.Application\KnowledgeAssistant.Application.csproj" />
     <ProjectReference Include="..\KnowledgeAssistant.Domain\KnowledgeAssistant.Domain.csproj" />

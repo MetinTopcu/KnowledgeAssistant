@@ -12,6 +12,19 @@
     TargetFramework / Nullable / ImplicitUsings are inherited from
     Directory.Build.props at the repo root.
   -->
+  <!--
+    Handlers, validators, and the prompt builder are internal on purpose: nothing
+    outside this assembly should construct them, and the only legitimate entry
+    point is the mediator. Tests need them anyway, and the alternatives are worse
+    — making them public to test them would widen the API surface for no
+    consumer, and reaching them by reflection defeats the compiler, so a renamed
+    method fails at run time instead of in the build.
+  -->
+  <ItemGroup Label="Test visibility">
+    <InternalsVisibleTo Include="KnowledgeAssistant.Tests.Unit" />
+    <InternalsVisibleTo Include="KnowledgeAssistant.Tests.Integration" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\KnowledgeAssistant.Domain\KnowledgeAssistant.Domain.csproj" />
   </ItemGroup>

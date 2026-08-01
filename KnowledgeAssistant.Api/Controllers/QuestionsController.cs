@@ -13,9 +13,9 @@ namespace KnowledgeAssistant.Api.Controllers;
 /// question, one grounded answer, no conversation retained between calls.
 /// Calling it a chat endpoint would promise a continuity it does not offer.
 /// </remarks>
+// See DocumentsController for why there is no class-level [Produces].
 [ApiController]
 [Route("api/questions")]
-[Produces("application/json")]
 public sealed class QuestionsController : ControllerBase
 {
     /// <summary>The number of chunks retrieved when the caller does not say.</summary>

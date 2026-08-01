@@ -1,0 +1,54 @@
+<Project>
+
+  <!--
+    Test-project settings, layered over the repo-root Directory.Build.props.
+
+    Importing the parent explicitly is what keeps the compiler contract
+    identical: tests are held to the same nullable, analyzer, and
+    warnings-as-errors rules as production code. A test project that compiles
+    under looser rules stops being evidence that the code it exercises is sound.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+
+    <!--
+      Test names read as sentences: Split_WhenTokenExceedsChunkSize_HardCuts.
+      CA1707 forbids underscores in identifiers, which is right for a public API
+      and wrong for a test name, where the underscores are the punctuation that
+      makes a failing test report legible. Suppressed only here.
+
+      xUnit1030 objects to ConfigureAwait inside test methods; the analyzer is
+      correct that it is pointless there, and the repo style uses it everywhere
+      else, so the rule is disabled rather than fought.
+
+      CA1859 asks that variables be typed as the concrete implementation to avoid
+      interface dispatch. In production that is a fair micro-optimisation; in a
+      test it is backwards. A test should hold the port it is asserting against,
+      because that is what a consumer holds — and obeying the rule here would
+      quietly convert every port test into an implementation test.
+    -->
+    <NoWarn>$(NoWarn);CA1707;CA1859;xUnit1030</NoWarn>
+
+    <!--
+      Tests document themselves through their names; XML docs on every fact
+      would be noise. The repo-wide GenerateDocumentationFile stays on so that
+      analyzers depending on it still run.
+    -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+</Project>

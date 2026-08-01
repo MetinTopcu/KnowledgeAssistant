@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    INTEGRATION TESTS — the real host, the real DI container, faked Azure.
+
+    These drive the application through HTTP with WebApplicationFactory, so
+    routing, model binding, middleware, the mediator, and the ProblemDetails
+    mapping are all genuinely exercised. Only the outbound Azure adapters are
+    substituted, because everything this project is testing sits between the
+    socket and those ports.
+
+    One test deliberately composes the container WITHOUT substitutions, to prove
+    the real registrations resolve. That is the check a fake-everything suite
+    would silently stop performing.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\KnowledgeAssistant.Api\KnowledgeAssistant.Api.csproj" />
+    <ProjectReference Include="..\..\KnowledgeAssistant.Application\KnowledgeAssistant.Application.csproj" />
+    <ProjectReference Include="..\..\KnowledgeAssistant.Domain\KnowledgeAssistant.Domain.csproj" />
+    <ProjectReference Include="..\..\KnowledgeAssistant.Infrastructure\KnowledgeAssistant.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+
+</Project>

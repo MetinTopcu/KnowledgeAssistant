@@ -9,9 +9,15 @@ namespace KnowledgeAssistant.Api.Controllers;
 /// <summary>
 /// Document ingestion endpoints.
 /// </summary>
+// No class-level [Produces("application/json")]. That attribute is a result
+// filter which CLEARS ObjectResult.ContentTypes and substitutes its own list, so
+// it silently overrode the "application/problem+json" that ResultExtensions and
+// ApiProblemDetails set on every failure — leaving this API claiming RFC 9457
+// while serving problem documents as ordinary application/json. The
+// [ProducesResponseType] attributes below still describe the contract for
+// OpenAPI, and the JSON formatter still produces application/json on success.
 [ApiController]
 [Route("api/documents")]
-[Produces("application/json")]
 public sealed class DocumentsController : ControllerBase
 {
     /// <summary>

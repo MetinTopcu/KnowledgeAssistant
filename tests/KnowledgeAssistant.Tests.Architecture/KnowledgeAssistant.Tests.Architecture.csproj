@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ARCHITECTURE TESTS — the layering rules, executable.
+
+    ARCHITECTURE.md documents the dependency rule; this project enforces it.
+    Documented rules erode quietly, because breaking one is a single using
+    directive that compiles. These fail the build instead.
+
+    It references all four production projects on purpose: to assert that
+    Application does not depend on Infrastructure, it must be able to see both.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\KnowledgeAssistant.Api\KnowledgeAssistant.Api.csproj" />
+    <ProjectReference Include="..\..\KnowledgeAssistant.Application\KnowledgeAssistant.Application.csproj" />
+    <ProjectReference Include="..\..\KnowledgeAssistant.Domain\KnowledgeAssistant.Domain.csproj" />
+    <ProjectReference Include="..\..\KnowledgeAssistant.Infrastructure\KnowledgeAssistant.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NetArchTest.Rules" />
+  </ItemGroup>
+
+</Project>

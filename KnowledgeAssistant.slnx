@@ -3,4 +3,9 @@
   <Project Path="KnowledgeAssistant.Application/KnowledgeAssistant.Application.csproj" />
   <Project Path="KnowledgeAssistant.Domain/KnowledgeAssistant.Domain.csproj" />
   <Project Path="KnowledgeAssistant.Infrastructure/KnowledgeAssistant.Infrastructure.csproj" />
+  <Folder Name="/tests/">
+    <Project Path="tests/KnowledgeAssistant.Tests.Architecture/KnowledgeAssistant.Tests.Architecture.csproj" />
+    <Project Path="tests/KnowledgeAssistant.Tests.Integration/KnowledgeAssistant.Tests.Integration.csproj" />
+    <Project Path="tests/KnowledgeAssistant.Tests.Unit/KnowledgeAssistant.Tests.Unit.csproj" />
+  </Folder>
 </Solution>
