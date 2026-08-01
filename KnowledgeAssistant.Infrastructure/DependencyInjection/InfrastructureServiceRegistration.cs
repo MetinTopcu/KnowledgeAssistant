@@ -351,6 +351,15 @@ public static class InfrastructureServiceRegistration
 
         services.AddSingleton<IEmbeddingService, AzureOpenAIEmbeddingService>();
 
+        // A second client from the same parent, so chat and embedding share one
+        // pipeline, one credential, and one token cache. The deployment name is
+        // bound here so no other type needs to know it.
+        services.AddSingleton(provider =>
+            provider.GetRequiredService<AzureOpenAIClient>()
+                .GetChatClient(options.ChatDeploymentName));
+
+        services.AddSingleton<IChatService, AzureOpenAIChatService>();
+
         return services;
     }
 

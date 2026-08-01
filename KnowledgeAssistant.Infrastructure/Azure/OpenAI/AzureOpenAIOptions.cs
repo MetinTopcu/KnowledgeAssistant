@@ -51,6 +51,37 @@ public sealed class AzureOpenAIOptions
     [Required(AllowEmptyStrings = false, ErrorMessage = "Azure:AiFoundry:EmbeddingDeploymentName must be configured.")]
     public string EmbeddingDeploymentName { get; init; } = string.Empty;
 
+    /// <summary>The name of the deployed chat model.</summary>
+    /// <remarks>
+    /// A deployment name, not a model name — the same distinction that trips up
+    /// the embedding setting. Required: unlike text extraction there is no local
+    /// fallback for generating an answer, so an unset value is a
+    /// misconfiguration rather than a choice.
+    /// </remarks>
+    [Required(AllowEmptyStrings = false, ErrorMessage = "Azure:AiFoundry:ChatDeploymentName must be configured.")]
+    public string ChatDeploymentName { get; init; } = string.Empty;
+
+    /// <summary>The ceiling on tokens generated per answer.</summary>
+    /// <remarks>
+    /// Bounds cost and latency per question. An answer that hits the ceiling is
+    /// returned truncated rather than discarded — a partial grounded answer is
+    /// usually more useful than none — and the truncation is logged, because the
+    /// remedy is to raise this value rather than to retry.
+    /// </remarks>
+    [Range(64, 16_384, ErrorMessage = "Azure:AiFoundry:ChatMaxOutputTokens must be between 64 and 16384.")]
+    public int ChatMaxOutputTokens { get; init; } = 800;
+
+    /// <summary>The sampling temperature for answers.</summary>
+    /// <remarks>
+    /// Zero by default, which is the right default for grounded question
+    /// answering: the same question over the same corpus should produce the same
+    /// answer, and variation in a factual lookup is noise rather than creativity.
+    /// Raising it makes answers less reproducible without making them better
+    /// grounded.
+    /// </remarks>
+    [Range(0.0, 2.0, ErrorMessage = "Azure:AiFoundry:ChatTemperature must be between 0.0 and 2.0.")]
+    public double ChatTemperature { get; init; }
+
     /// <summary>The underlying model behind the embedding deployment.</summary>
     /// <remarks>
     /// Distinct from <see cref="EmbeddingDeploymentName"/>, and needed because

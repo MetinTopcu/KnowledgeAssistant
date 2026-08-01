@@ -1,6 +1,4 @@
 using System.ClientModel;
-using System.ClientModel.Primitives;
-using System.Globalization;
 using Azure.Identity;
 using KnowledgeAssistant.Application.Interfaces;
 using KnowledgeAssistant.Domain.Common;
@@ -8,7 +6,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenAI.Embeddings;
 using Polly;
-using Polly.Retry;
 
 namespace KnowledgeAssistant.Infrastructure.Azure.OpenAI;
 
@@ -19,30 +16,24 @@ namespace KnowledgeAssistant.Infrastructure.Azure.OpenAI;
 /// <para>
 /// <b>Registered as a singleton.</b> <see cref="EmbeddingClient"/> is thread-safe
 /// and holds a pooled connection and a cached token, and the resilience pipeline
-/// built in the constructor is immutable and reusable. Building either per
-/// request would re-run the credential chain and discard the retry state that
-/// makes backoff meaningful.
+/// is immutable and reusable.
 /// </para>
 /// <para>
-/// <b>Batches are sent one after another, not in parallel.</b> Concurrency here
-/// would multiply the request rate against a quota that is already the most
-/// common cause of failure, converting a slow ingestion into a failing one. If
-/// throughput becomes the constraint, the answer is a larger deployment or a
-/// queue, not more simultaneous requests from a single caller.
+/// <b>Both public methods route through one private path.</b> Embedding a corpus
+/// and embedding a question are the same request with different callers, and the
+/// batching, retry, order verification, and dimension check must be identical for
+/// both — because a question embedded differently from the corpus produces a
+/// search that returns confident nonsense rather than an error.
+/// </para>
+/// <para>
+/// <b>Batches are sent one after another, not in parallel.</b> Concurrency would
+/// multiply the request rate against a quota that is already the most common
+/// cause of failure. If throughput becomes the constraint, the answer is a larger
+/// deployment or a queue, not more simultaneous requests from one caller.
 /// </para>
 /// </remarks>
 internal sealed partial class AzureOpenAIEmbeddingService : IEmbeddingService
 {
-    /// <summary>HTTP statuses worth trying again.</summary>
-    /// <remarks>
-    /// 408 and 5xx are transport or server faults that frequently succeed on a
-    /// second attempt. 429 is the rate limit, and is the reason this list exists
-    /// at all. Everything else — 400, 401, 404 — is deterministic: the request,
-    /// the credential, or the deployment name is wrong, and repeating it only
-    /// wastes the caller's time before failing identically.
-    /// </remarks>
-    private static readonly int[] TransientStatuses = [408, 429, 500, 502, 503, 504];
-
     private readonly EmbeddingClient _embeddingClient;
     private readonly AzureOpenAIOptions _options;
     private readonly ResiliencePipeline _resiliencePipeline;
@@ -60,7 +51,7 @@ internal sealed partial class AzureOpenAIEmbeddingService : IEmbeddingService
         _embeddingClient = embeddingClient;
         _options = options.Value;
         _logger = logger;
-        _resiliencePipeline = BuildResiliencePipeline();
+        _resiliencePipeline = OpenAIResiliencePipeline.Create(_options, logger, "embedding");
     }
 
     /// <inheritdoc />
@@ -75,44 +66,98 @@ internal sealed partial class AzureOpenAIEmbeddingService : IEmbeddingService
             return Result.Success<IReadOnlyList<ChunkEmbedding>>([]);
         }
 
-        var embeddings = new List<ChunkEmbedding>(chunks.Count);
-        int batchSize = _options.EmbeddingBatchSize;
+        var texts = new string[chunks.Count];
 
-        for (int offset = 0; offset < chunks.Count; offset += batchSize)
+        for (int index = 0; index < chunks.Count; index++)
         {
-            int count = Math.Min(batchSize, chunks.Count - offset);
-
-            Result batchResult = await EmbedBatchAsync(chunks, offset, count, embeddings, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (batchResult.IsFailure)
-            {
-                // Everything accumulated so far is discarded. See the port's
-                // remarks: a partially embedded document is worse than none.
-                return Result.Failure<IReadOnlyList<ChunkEmbedding>>(batchResult.Error);
-            }
+            texts[index] = chunks[index].Text;
         }
 
-        LogEmbeddingsGenerated(chunks.Count, (chunks.Count + batchSize - 1) / batchSize);
+        Result<ReadOnlyMemory<float>[]> vectors = await EmbedTextsAsync(texts, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (vectors.IsFailure)
+        {
+            return Result.Failure<IReadOnlyList<ChunkEmbedding>>(vectors.Error);
+        }
+
+        // Safe to pair by position: EmbedTextsAsync returns one vector per input in
+        // request order, and verifies that count itself before returning.
+        var embeddings = new ChunkEmbedding[chunks.Count];
+
+        for (int index = 0; index < chunks.Count; index++)
+        {
+            embeddings[index] = new ChunkEmbedding(chunks[index].ChunkId, vectors.Value[index]);
+        }
 
         return Result.Success<IReadOnlyList<ChunkEmbedding>>(embeddings);
     }
 
+    /// <inheritdoc />
+    public async Task<Result<ReadOnlyMemory<float>>> GenerateEmbeddingAsync(
+        string text,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+
+        Result<ReadOnlyMemory<float>[]> vectors = await EmbedTextsAsync([text], cancellationToken)
+            .ConfigureAwait(false);
+
+        return vectors.IsFailure
+            ? Result.Failure<ReadOnlyMemory<float>>(vectors.Error)
+            : Result.Success(vectors.Value[0]);
+    }
+
     /// <summary>
-    /// Embeds one batch and appends the results to <paramref name="destination"/>.
+    /// Embeds every text, in batches, and returns the vectors in request order.
     /// </summary>
+    /// <remarks>
+    /// The single implementation both public methods delegate to. Everything that
+    /// must not differ between embedding a corpus and embedding a query — retry
+    /// policy, batch size, order verification, dimension validation — lives here
+    /// exactly once.
+    /// </remarks>
+    private async Task<Result<ReadOnlyMemory<float>[]>> EmbedTextsAsync(
+        string[] texts,
+        CancellationToken cancellationToken)
+    {
+        var vectors = new ReadOnlyMemory<float>[texts.Length];
+        int batchSize = _options.EmbeddingBatchSize;
+
+        for (int offset = 0; offset < texts.Length; offset += batchSize)
+        {
+            int count = Math.Min(batchSize, texts.Length - offset);
+
+            Result batchResult = await EmbedBatchAsync(texts, offset, count, vectors, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (batchResult.IsFailure)
+            {
+                // Everything gathered so far is discarded. A partially embedded
+                // document is worse than none: indexing it leaves the document
+                // silently incomplete.
+                return Result.Failure<ReadOnlyMemory<float>[]>(batchResult.Error);
+            }
+        }
+
+        LogEmbeddingsGenerated(texts.Length, (texts.Length + batchSize - 1) / batchSize);
+
+        return vectors;
+    }
+
+    /// <summary>Embeds one batch and writes the vectors into <paramref name="destination"/>.</summary>
     private async Task<Result> EmbedBatchAsync(
-        IReadOnlyList<DocumentChunk> chunks,
+        string[] texts,
         int offset,
         int count,
-        List<ChunkEmbedding> destination,
+        ReadOnlyMemory<float>[] destination,
         CancellationToken cancellationToken)
     {
         var inputs = new string[count];
 
         for (int index = 0; index < count; index++)
         {
-            inputs[index] = chunks[offset + index].Text;
+            inputs[index] = texts[offset + index];
         }
 
         OpenAIEmbeddingCollection collection;
@@ -140,9 +185,7 @@ internal sealed partial class AzureOpenAIEmbeddingService : IEmbeddingService
             LogGenerationFailed(exception, offset, count, exception.Status);
             return Result.Failure(EmbeddingErrors.GenerationFailed);
         }
-        // Covers CredentialUnavailableException too, which derives from it: the
-        // credential chain finding no identity and the chain failing to redeem one
-        // are the same problem to a caller, and the log carries the distinction.
+        // Covers CredentialUnavailableException too, which derives from it.
         catch (AuthenticationFailedException exception)
         {
             LogAuthenticationFailed(exception);
@@ -150,32 +193,29 @@ internal sealed partial class AzureOpenAIEmbeddingService : IEmbeddingService
         }
         catch (HttpRequestException exception)
         {
-            // The transport never reached the service. Distinct from a
-            // ClientResultException, which means the service answered.
             LogTransportFailed(exception);
             return Result.Failure(EmbeddingErrors.GenerationFailed);
         }
 
-        return MapBatch(chunks, offset, count, collection, destination);
+        return MapBatch(offset, count, collection, destination);
     }
 
     /// <summary>
-    /// Pairs each returned vector with the chunk it was generated from.
+    /// Copies each returned vector into its input's slot.
     /// </summary>
     /// <remarks>
     /// <b>Position is the only available correspondence.</b> The SDK's returned
     /// embedding type exposes no index, so this relies on the service returning
     /// results in request order — which the API contract guarantees. The count
-    /// check below is what keeps that reliance honest: it is the only externally
-    /// visible symptom if the assumption ever stops holding, and a wrong pairing
-    /// is undetectable everywhere downstream.
+    /// check is what keeps that reliance honest: it is the only externally visible
+    /// symptom if the assumption ever stops holding, and a wrong pairing is
+    /// undetectable everywhere downstream.
     /// </remarks>
     private Result MapBatch(
-        IReadOnlyList<DocumentChunk> chunks,
         int offset,
         int count,
         OpenAIEmbeddingCollection collection,
-        List<ChunkEmbedding> destination)
+        ReadOnlyMemory<float>[] destination)
     {
         int received = 0;
 
@@ -195,7 +235,7 @@ internal sealed partial class AzureOpenAIEmbeddingService : IEmbeddingService
                 return Result.Failure(EmbeddingErrors.DimensionMismatch);
             }
 
-            destination.Add(new ChunkEmbedding(chunks[offset + received].ChunkId, vector));
+            destination[offset + received] = vector;
             received++;
         }
 
@@ -208,124 +248,22 @@ internal sealed partial class AzureOpenAIEmbeddingService : IEmbeddingService
         return Result.Success();
     }
 
-    /// <summary>
-    /// Builds the retry pipeline that wraps every embedding request.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>This is the only retry in play.</b> The client is deliberately
-    /// registered with its own retry disabled — see the DI registration. Two
-    /// retry layers multiply rather than add, so four attempts here over three in
-    /// the SDK would be twelve requests to a deployment that is most likely
-    /// failing because it is already receiving too many.
-    /// </para>
-    /// <para>
-    /// <b>Cancellation is never retried.</b> <see cref="OperationCanceledException"/>
-    /// is absent from the predicate on purpose: a caller who has disconnected
-    /// wants the work abandoned, and retrying their cancellation would hold the
-    /// request open for the full backoff schedule.
-    /// </para>
-    /// <para>
-    /// <b>Jitter is enabled</b> because without it every worker that hit the same
-    /// rate limit retries at the same instant, reproducing the burst that caused
-    /// the limit and turning one 429 into a synchronised cycle of them.
-    /// </para>
-    /// </remarks>
-    private ResiliencePipeline BuildResiliencePipeline() =>
-        new ResiliencePipelineBuilder()
-            .AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder()
-                    .Handle<ClientResultException>(exception => Array.IndexOf(TransientStatuses, exception.Status) >= 0)
-                    .Handle<HttpRequestException>(),
-                MaxRetryAttempts = _options.MaxRetryAttempts,
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                Delay = TimeSpan.FromSeconds(_options.RetryBaseDelaySeconds),
-                MaxDelay = TimeSpan.FromSeconds(_options.RetryMaxDelaySeconds),
-
-                // Returning null defers to the exponential schedule above. A value
-                // is returned only when the service told us how long to wait, in
-                // which case guessing is strictly worse than obeying.
-                DelayGenerator = arguments => ValueTask.FromResult(
-                    GetRetryAfter(arguments.Outcome.Exception, _options.RetryMaxDelaySeconds)),
-
-                OnRetry = arguments =>
-                {
-                    LogRetrying(
-                        arguments.AttemptNumber + 1,
-                        _options.MaxRetryAttempts,
-                        arguments.RetryDelay.TotalMilliseconds,
-                        (arguments.Outcome.Exception as ClientResultException)?.Status ?? 0);
-
-                    return ValueTask.CompletedTask;
-                },
-            })
-            .Build();
-
-    /// <summary>
-    /// Reads a <c>Retry-After</c> header, if the service supplied one.
-    /// </summary>
-    /// <remarks>
-    /// The header comes in two forms — delay in seconds, or an HTTP date — and
-    /// Azure OpenAI uses the former for rate limits. Both are handled, and both
-    /// are clamped: an unbounded wait taken on a service's word would pin a
-    /// request thread for as long as that service cared to name.
-    /// </remarks>
-    private static TimeSpan? GetRetryAfter(Exception? exception, double maximumSeconds)
-    {
-        if (exception is not ClientResultException clientException)
-        {
-            return null;
-        }
-
-        PipelineResponse? response = clientException.GetRawResponse();
-
-        if (response is null ||
-            !response.Headers.TryGetValue("retry-after", out string? headerValue) ||
-            string.IsNullOrWhiteSpace(headerValue))
-        {
-            return null;
-        }
-
-        var maximum = TimeSpan.FromSeconds(maximumSeconds);
-
-        if (double.TryParse(headerValue, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds))
-        {
-            return seconds <= 0 ? TimeSpan.Zero : Min(TimeSpan.FromSeconds(seconds), maximum);
-        }
-
-        if (DateTimeOffset.TryParse(
-                headerValue,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AdjustToUniversal,
-                out DateTimeOffset retryAt))
-        {
-            TimeSpan delay = retryAt - DateTimeOffset.UtcNow;
-            return delay <= TimeSpan.Zero ? TimeSpan.Zero : Min(delay, maximum);
-        }
-
-        return null;
-    }
-
-    private static TimeSpan Min(TimeSpan left, TimeSpan right) => left < right ? left : right;
-
     [LoggerMessage(
         EventId = 5000,
         Level = LogLevel.Information,
-        Message = "Generated embeddings for {ChunkCount} chunks in {RequestCount} requests.")]
-    private partial void LogEmbeddingsGenerated(int chunkCount, int requestCount);
+        Message = "Generated embeddings for {InputCount} inputs in {RequestCount} requests.")]
+    private partial void LogEmbeddingsGenerated(int inputCount, int requestCount);
 
     [LoggerMessage(
         EventId = 5001,
         Level = LogLevel.Error,
-        Message = "Embedding request failed for chunks {Offset}..{Count} with status {Status}.")]
+        Message = "Embedding request failed for inputs {Offset}..{Count} with status {Status}.")]
     private partial void LogGenerationFailed(Exception exception, int offset, int count, int status);
 
     [LoggerMessage(
         EventId = 5002,
         Level = LogLevel.Error,
-        Message = "Embedding deployment is rate limited; retries were exhausted for chunks {Offset}..{Count}.")]
+        Message = "Embedding deployment is rate limited; retries were exhausted for inputs {Offset}..{Count}.")]
     private partial void LogRateLimited(Exception exception, int offset, int count);
 
     [LoggerMessage(
@@ -352,10 +290,4 @@ internal sealed partial class AzureOpenAIEmbeddingService : IEmbeddingService
         Message = "Embedding dimension mismatch: configured {Expected} but the deployment returned {Actual}. " +
                   "The deployment is serving a different model than the configuration expects.")]
     private partial void LogDimensionMismatch(int expected, int actual);
-
-    [LoggerMessage(
-        EventId = 5007,
-        Level = LogLevel.Warning,
-        Message = "Retrying embedding request (attempt {Attempt} of {MaxAttempts}) after {DelayMs}ms; last status {Status}.")]
-    private partial void LogRetrying(int attempt, int maxAttempts, double delayMs, int status);
 }

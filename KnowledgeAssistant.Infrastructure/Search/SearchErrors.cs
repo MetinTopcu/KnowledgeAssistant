@@ -51,4 +51,20 @@ internal static class SearchErrors
     internal static readonly Error AuthenticationFailed = Error.Failure(
         "Search.AuthenticationFailed",
         "Document indexing is currently unavailable.");
+
+    /// <summary>The retrieval index does not exist.</summary>
+    /// <remarks>
+    /// Means nothing has been ingested: the chunk index is created by the first
+    /// successful ingestion, so its absence is an empty system rather than a
+    /// broken one. Kept distinct because the remedy is to upload a document, and
+    /// an operator sent to investigate an outage would find nothing wrong.
+    /// </remarks>
+    internal static readonly Error ChunkIndexUnavailable = Error.Failure(
+        "Search.ChunkIndexUnavailable",
+        "No documents have been indexed yet.");
+
+    /// <summary>The search request was rejected by the service.</summary>
+    internal static readonly Error SearchFailed = Error.Failure(
+        "Search.SearchFailed",
+        "The search could not be completed.");
 }

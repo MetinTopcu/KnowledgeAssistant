@@ -5,6 +5,7 @@ using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Models;
 using KnowledgeAssistant.Application.Interfaces;
 using KnowledgeAssistant.Domain.Common;
+using KnowledgeAssistant.Infrastructure.Search.Vectors;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -32,7 +33,9 @@ internal sealed partial class AzureSearchService : IAzureSearchService, IDisposa
 {
     private readonly SearchIndexClient _indexClient;
     private readonly SearchClient _searchClient;
+    private readonly SearchClient _chunkSearchClient;
     private readonly string _indexName;
+    private readonly string _chunkIndexName;
     private readonly ILogger<AzureSearchService> _logger;
 
     // Guards the one-time index check. Deliberately not a Lazy<Task>: that caches
@@ -54,9 +57,18 @@ internal sealed partial class AzureSearchService : IAzureSearchService, IDisposa
         _indexClient = indexClient;
         _indexName = options.Value.IndexName;
 
+        _chunkIndexName = options.Value.ChunkIndexName;
+
         // Derived from the index client rather than registered separately, so both
         // clients provably share one pipeline, one credential, and one token cache.
         _searchClient = indexClient.GetSearchClient(_indexName);
+
+        // A second client, for the chunk index this service reads but does not
+        // own. Creating that index is the vector adapter's job; querying it needs
+        // nothing but a client, and duplicating the provisioning logic here to get
+        // one would be the actual mistake.
+        _chunkSearchClient = indexClient.GetSearchClient(_chunkIndexName);
+
         _logger = logger;
     }
 
@@ -138,6 +150,130 @@ internal sealed partial class AzureSearchService : IAzureSearchService, IDisposa
         LogIndexingSucceeded(request.DocumentId, _indexName);
 
         return Result.Success();
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<IReadOnlyList<ChunkSearchResult>>> SearchChunksAsync(
+        ReadOnlyMemory<float> queryVector,
+        int topK,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(topK);
+
+        if (queryVector.IsEmpty)
+        {
+            throw new ArgumentException("The query vector must not be empty.", nameof(queryVector));
+        }
+
+        // Field names come from the indexed model rather than string literals, so
+        // a rename that would silently break retrieval fails to compile instead.
+        var vectorQuery = new VectorizedQuery(queryVector)
+        {
+            KNearestNeighborsCount = topK,
+            Fields = { nameof(ChunkSearchDocument.Embedding) },
+        };
+
+        var searchOptions = new SearchOptions
+        {
+            // Bounds the response as well as the vector search. Without it the
+            // service applies its own default page size, which need not match the
+            // number of neighbours requested.
+            Size = topK,
+            VectorSearch = new VectorSearchOptions { Queries = { vectorQuery } },
+
+            // Selecting explicitly keeps the response to what a citation needs.
+            // The vector field is excluded anyway — the schema marks it hidden —
+            // but naming the fields means adding one to the index does not quietly
+            // start inflating every search response.
+            Select =
+            {
+                nameof(ChunkSearchDocument.ChunkId),
+                nameof(ChunkSearchDocument.DocumentId),
+                nameof(ChunkSearchDocument.ChunkOrder),
+                nameof(ChunkSearchDocument.ChunkText),
+                nameof(ChunkSearchDocument.BlobUri),
+            },
+        };
+
+        try
+        {
+            // A null search text makes this a pure vector query: no keyword
+            // matching, and therefore no accidental hybrid retrieval.
+            Response<SearchResults<ChunkSearchDocument>> response = await _chunkSearchClient
+                .SearchAsync<ChunkSearchDocument>(searchText: null, searchOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            var results = new List<ChunkSearchResult>(topK);
+
+            await foreach (SearchResult<ChunkSearchDocument> hit in
+                response.Value.GetResultsAsync().WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                ChunkSearchResult? mapped = MapHit(hit);
+
+                if (mapped is not null)
+                {
+                    results.Add(mapped);
+                }
+            }
+
+            LogChunksRetrieved(results.Count, topK, _chunkIndexName);
+
+            return results;
+        }
+        catch (RequestFailedException exception) when (exception.Status == 404)
+        {
+            // The chunk index has never been created, which means nothing has been
+            // ingested yet. Distinguished from a general failure because the remedy
+            // is to ingest a document, not to investigate an outage.
+            LogChunkIndexMissing(exception, _chunkIndexName);
+            return Result.Failure<IReadOnlyList<ChunkSearchResult>>(SearchErrors.ChunkIndexUnavailable);
+        }
+        catch (RequestFailedException exception)
+        {
+            LogSearchFailed(exception, _chunkIndexName, exception.Status, exception.ErrorCode);
+            return Result.Failure<IReadOnlyList<ChunkSearchResult>>(SearchErrors.SearchFailed);
+        }
+        catch (AuthenticationFailedException exception)
+        {
+            LogAuthenticationFailed(exception);
+            return Result.Failure<IReadOnlyList<ChunkSearchResult>>(SearchErrors.AuthenticationFailed);
+        }
+        catch (AggregateException exception)
+        {
+            LogTransportFailed(exception, _chunkIndexName);
+            return Result.Failure<IReadOnlyList<ChunkSearchResult>>(SearchErrors.SearchFailed);
+        }
+    }
+
+    /// <summary>
+    /// Maps one hit onto the port's vendor-neutral result.
+    /// </summary>
+    /// <remarks>
+    /// Returns <see langword="null"/> for a document whose identifiers or source
+    /// URI cannot be parsed. Such a record cannot be cited — nothing could resolve
+    /// it back to a document — so it is dropped and logged rather than surfaced as
+    /// a citation pointing nowhere. It should be unreachable: this index is only
+    /// ever written by the vector adapter.
+    /// </remarks>
+    private ChunkSearchResult? MapHit(SearchResult<ChunkSearchDocument> hit)
+    {
+        ChunkSearchDocument document = hit.Document;
+
+        if (!Guid.TryParse(document.ChunkId, out Guid chunkId) ||
+            !Guid.TryParse(document.DocumentId, out Guid documentId) ||
+            !Uri.TryCreate(document.BlobUri, UriKind.Absolute, out Uri? blobUri))
+        {
+            LogUnmappableHit(document.ChunkId ?? "(null)");
+            return null;
+        }
+
+        return new ChunkSearchResult(
+            ChunkId: chunkId,
+            DocumentId: documentId,
+            ChunkOrder: document.ChunkOrder,
+            Text: document.ChunkText,
+            BlobUri: blobUri,
+            Score: hit.Score ?? 0);
     }
 
     /// <summary>
@@ -272,4 +408,28 @@ internal sealed partial class AzureSearchService : IAzureSearchService, IDisposa
         Level = LogLevel.Error,
         Message = "Azure AI Search was unreachable for {Target} after all retries were exhausted.")]
     private partial void LogTransportFailed(Exception exception, string target);
+
+    [LoggerMessage(
+        EventId = 2008,
+        Level = LogLevel.Debug,
+        Message = "Vector search returned {ResultCount} of {TopK} requested chunks from {IndexName}.")]
+    private partial void LogChunksRetrieved(int resultCount, int topK, string indexName);
+
+    [LoggerMessage(
+        EventId = 2009,
+        Level = LogLevel.Warning,
+        Message = "Chunk index {IndexName} does not exist. No documents have been ingested yet.")]
+    private partial void LogChunkIndexMissing(Exception exception, string indexName);
+
+    [LoggerMessage(
+        EventId = 2010,
+        Level = LogLevel.Error,
+        Message = "Vector search against {IndexName} failed. Search returned {Status} ({ErrorCode}).")]
+    private partial void LogSearchFailed(Exception exception, string indexName, int status, string? errorCode);
+
+    [LoggerMessage(
+        EventId = 2011,
+        Level = LogLevel.Error,
+        Message = "Dropped a search hit whose identifiers could not be parsed: chunk key {ChunkKey}.")]
+    private partial void LogUnmappableHit(string chunkKey);
 }

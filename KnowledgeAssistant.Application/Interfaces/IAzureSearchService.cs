@@ -48,4 +48,41 @@ public interface IAzureSearchService
     Task<Result> IndexDocumentAsync(
         DocumentIndexRequest request,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Finds the chunks whose vectors are closest to <paramref name="queryVector"/>.
+    /// </summary>
+    /// <param name="queryVector">
+    /// The embedding of the query, produced by the same model that embedded the
+    /// corpus.
+    /// </param>
+    /// <param name="topK">The maximum number of chunks to return.</param>
+    /// <param name="cancellationToken">Cancelled when the caller disconnects.</param>
+    /// <returns>
+    /// The matching chunks in descending relevance order — possibly empty — or the
+    /// failure that prevented the search.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>An empty result is a success.</b> A corpus that contains nothing
+    /// relevant to a question is a fact about the corpus, not a fault, and the
+    /// caller has a sensible response to it. Reporting it as a failure would
+    /// force every caller to decode an error to discover that nothing went wrong.
+    /// </para>
+    /// <para>
+    /// <b>Pure vector similarity.</b> No keyword matching, no reciprocal-rank
+    /// fusion, no semantic reranking — those are distinct retrieval strategies
+    /// with their own costs and their own tuning, and adding them silently
+    /// underneath this signature would change results without changing the
+    /// contract.
+    /// </para>
+    /// <para>
+    /// The query vector is a <see cref="ReadOnlyMemory{T}"/> of
+    /// <see cref="float"/> — a BCL type — so no vendor type appears here.
+    /// </para>
+    /// </remarks>
+    Task<Result<IReadOnlyList<ChunkSearchResult>>> SearchChunksAsync(
+        ReadOnlyMemory<float> queryVector,
+        int topK,
+        CancellationToken cancellationToken);
 }

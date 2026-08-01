@@ -217,6 +217,43 @@ policy. That is a change of shape, not of logic: every stage moves unmodified.
 
 ---
 
+## 5b. The retrieval pipeline
+
+One query drives four stages:
+
+```
+embed question → vector search → build prompt → chat completion
+```
+
+**The question is embedded by the same service that embedded the corpus.** Not
+for tidiness: vectors from different models are not comparable, and comparing
+them yields a search that returns plausible nonsense rather than an error.
+`IEmbeddingService` carries both a chunk overload and a single-text overload, and
+both route through one private request path, so batching, retry, order
+verification, and the dimension check cannot diverge between indexing and
+querying.
+
+**Retrieving nothing is a success.** With no sources, the system prompt leaves
+the model nothing to do but decline — so the handler returns that answer directly
+and never calls the model. It saves the call and removes the one opportunity for
+an ungrounded answer to appear.
+
+**Citations are numbered from what the model was actually sent.** The prompt
+builder and the citation list walk the same ordered chunk list and stop at the
+same context budget, so a `[2]` in the answer resolves to the second citation. A
+citation list longer than the evidence sent would credit the answer to text the
+model never saw.
+
+**The prompt lives in Application, not Infrastructure.** It encodes product
+rules — ground everything, cite sources, decline when the evidence is absent —
+that must survive changing the model behind them.
+
+**Nothing here writes.** A failure at any stage leaves no state to reconcile,
+which is the sharp contrast with ingestion, where every stage past the first can
+leave an orphaned blob.
+
+---
+
 ## 6. Open decisions for you
 
 **`Api/Controllers` vs `Api/Endpoints` overlap.** Both were requested and both
