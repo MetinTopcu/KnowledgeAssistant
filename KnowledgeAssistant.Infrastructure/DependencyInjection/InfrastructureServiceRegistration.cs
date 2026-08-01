@@ -12,6 +12,7 @@ using KnowledgeAssistant.Infrastructure.Azure.DocumentIntelligence;
 using KnowledgeAssistant.Infrastructure.Azure.OpenAI;
 using KnowledgeAssistant.Infrastructure.Search;
 using KnowledgeAssistant.Infrastructure.Search.Chunking;
+using KnowledgeAssistant.Infrastructure.Search.Vectors;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -198,6 +199,12 @@ public static class InfrastructureServiceRegistration
         // thread-safe and expensive to construct, and the index-existence cache
         // depends on this lifetime.
         services.AddSingleton<IAzureSearchService, AzureSearchService>();
+
+        // The vector adapter shares the SearchIndexClient registered above — one
+        // pipeline, one credential, one token cache — and derives its own
+        // SearchClient for the chunk index from it. It is a separate service
+        // because it writes a separate index with a different key.
+        services.AddSingleton<IVectorIndexService, AzureSearchVectorIndexService>();
 
         return services;
     }

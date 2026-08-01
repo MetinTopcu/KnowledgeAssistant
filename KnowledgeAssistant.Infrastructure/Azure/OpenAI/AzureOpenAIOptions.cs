@@ -51,6 +51,17 @@ public sealed class AzureOpenAIOptions
     [Required(AllowEmptyStrings = false, ErrorMessage = "Azure:AiFoundry:EmbeddingDeploymentName must be configured.")]
     public string EmbeddingDeploymentName { get; init; } = string.Empty;
 
+    /// <summary>The underlying model behind the embedding deployment.</summary>
+    /// <remarks>
+    /// Distinct from <see cref="EmbeddingDeploymentName"/>, and needed because
+    /// Azure AI Search's integrated vectorizer validates the model rather than
+    /// the deployment: it checks that the dimensions an index declares are
+    /// achievable by that model before it will accept the index definition. It is
+    /// unused by embedding generation itself, which addresses the deployment.
+    /// </remarks>
+    [Required(AllowEmptyStrings = false, ErrorMessage = "Azure:AiFoundry:EmbeddingModelName must be configured.")]
+    public string EmbeddingModelName { get; init; } = "text-embedding-3-small";
+
     /// <summary>
     /// The vector length the deployed model is expected to produce, or 0 to skip
     /// the check.

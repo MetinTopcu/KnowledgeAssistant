@@ -120,6 +120,9 @@ everywhere.
 | `Azure:Storage:ServiceUri` | `Azure__Storage__ServiceUri` |
 | `Azure:Search:Endpoint` | `Azure__Search__Endpoint` |
 | `Azure:Search:IndexName` | `Azure__Search__IndexName` |
+| `Azure:Search:ChunkIndexName` | `Azure__Search__ChunkIndexName` |
+| `Azure:Search:IndexingBatchSize` | `Azure__Search__IndexingBatchSize` |
+| `Azure:Search:EnableVectorizer` | `Azure__Search__EnableVectorizer` |
 | `Azure:AiFoundry:Endpoint` | `Azure__AiFoundry__Endpoint` |
 | `Azure:AiFoundry:ChatDeploymentName` | `Azure__AiFoundry__ChatDeploymentName` |
 | `Azure:AiFoundry:EmbeddingDeploymentName` | `Azure__AiFoundry__EmbeddingDeploymentName` |
@@ -173,6 +176,22 @@ source of `403`s.
 | Key Vault | `Key Vault Secrets User` |
 
 Grant the same roles to each developer's own account for local development.
+
+### The vectorizer needs a role assignment on a *different* identity
+
+`Azure:Search:EnableVectorizer` declares integrated vectorization on the chunk
+index, so the search service can embed a query string at query time. That call is
+made by the **search service's own managed identity**, not by this application's
+— so granting the app `Cognitive Services OpenAI User` does nothing for it:
+
+| Identity | Resource | Role |
+|---|---|---|
+| **Search service** managed identity | AI Foundry / OpenAI | `Cognitive Services OpenAI User` |
+
+Enable a system-assigned identity on the search service and assign that role. The
+index will be created successfully without it — the vectorizer is only exercised
+by queries, which nothing issues yet — so a missing grant surfaces later, as a
+failing search rather than a failing deployment.
 
 ---
 
