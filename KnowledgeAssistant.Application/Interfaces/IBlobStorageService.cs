@@ -50,4 +50,41 @@ public interface IBlobStorageService
         string contentType,
         Stream content,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reads back the content stored under <paramref name="blobName"/>.
+    /// </summary>
+    /// <param name="blobName">
+    /// The name returned by <see cref="UploadAsync"/>, including its virtual
+    /// directory prefix.
+    /// </param>
+    /// <param name="cancellationToken">Cancelled when the caller disconnects.</param>
+    /// <returns>
+    /// A readable stream positioned at the start, which the caller owns and must
+    /// dispose, or the failure that prevented the read.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Why ingestion re-reads bytes it just wrote.</b> The stream the caller
+    /// uploaded has been consumed, and rewinding it is only possible because the
+    /// web framework happens to buffer request bodies — an implementation detail
+    /// of one delivery mechanism that this layer must not depend on. Reading from
+    /// storage instead means the pipeline works identically when it is later
+    /// driven by a queue message or a reconciliation job, neither of which has an
+    /// original stream to rewind.
+    /// </para>
+    /// <para>
+    /// It also makes storage the single source of truth: everything downstream
+    /// processes the bytes that were actually persisted, not the bytes that were
+    /// supposed to have been.
+    /// </para>
+    /// <para>
+    /// The returned stream is seekable. Parsers that read a file's trailer and
+    /// then seek backwards — which PDF requires — would otherwise have to buffer
+    /// the whole thing again themselves.
+    /// </para>
+    /// </remarks>
+    Task<Result<Stream>> DownloadAsync(
+        string blobName,
+        CancellationToken cancellationToken);
 }

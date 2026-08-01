@@ -172,6 +172,51 @@ deployment names and there is no key to leak. See **`CONFIGURATION.md`**.
 
 ---
 
+## 5a. The ingestion pipeline, and what happens when it half-fails
+
+One command drives six stages:
+
+```
+upload → download → chunk → embed → index chunks → index document
+```
+
+The handler orchestrates and computes nothing; each stage is a port that owns its
+own rules, retries, and failure taxonomy. Service errors pass through unwrapped,
+so the error code the caller sees (`Chunking.*`, `Embedding.*`, `VectorIndex.*`)
+names the stage that broke.
+
+**Bytes are re-read from storage rather than reusing the uploaded stream.**
+Rewinding the request stream only works because ASP.NET Core buffers request
+bodies — a property of one delivery mechanism. Reading from storage keeps the
+pipeline runnable from a queue message or a reconciliation job, and makes storage
+the single source of truth for what is actually processed.
+
+**The document index is written last, and that is what makes partial failures
+tractable.** Its presence is the ingestion-complete marker:
+
+- blob **with** a document-index entry → fully ingested
+- blob **without** one → incomplete ingestion, whatever stage it stopped at
+
+So the orphaned-blob question has an operational answer. A reconciliation pass
+lists blobs, reads the `documentId` the storage adapter writes into blob
+metadata, checks the document index, and re-drives anything missing. It converges
+rather than duplicating, because every step is idempotent by construction: the
+blob name derives from the document id, chunk ids derive from the document id and
+position, and both indexes upsert.
+
+**Orphaned blobs are never deleted.** The blob is the input and the only artefact
+ingestion can be replayed from. A compensating delete destroys the user's upload
+to tidy up a retryable failure, and a delete that itself fails leaves the original
+problem plus a half-executed rollback.
+
+**Known limitation.** Ingestion is synchronous, so a caller waits through
+extraction, embedding, and two index writes, and a disconnect cancels nearly
+finished work. The fix is to store-and-enqueue, running the pipeline from the
+queue — at which point the reconciliation rule above becomes the queue's retry
+policy. That is a change of shape, not of logic: every stage moves unmodified.
+
+---
+
 ## 6. Open decisions for you
 
 **`Api/Controllers` vs `Api/Endpoints` overlap.** Both were requested and both

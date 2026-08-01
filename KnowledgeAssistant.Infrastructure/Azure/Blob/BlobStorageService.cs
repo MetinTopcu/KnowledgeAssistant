@@ -134,6 +134,57 @@ internal sealed partial class BlobStorageService : IBlobStorageService, IDisposa
         return new BlobUploadResult(blobName, blobClient.Uri, sizeInBytes);
     }
 
+    /// <inheritdoc />
+    public async Task<Result<Stream>> DownloadAsync(string blobName, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(blobName);
+
+        // No container check here, unlike the upload path. A missing container
+        // produces the same 404 as a missing blob, and creating one on a read
+        // would be creating somewhere for content that by definition is not there.
+        BlobClient blobClient = _containerClient.GetBlobClient(blobName);
+
+        try
+        {
+            // DownloadContent rather than DownloadStreaming: it buffers the blob
+            // and returns a seekable stream. The alternative is forward-only, and
+            // every consumer that needs to seek — the PDF parser does — would copy
+            // it into memory anyway, so streaming would buy an extra copy rather
+            // than save one. Bounded by the endpoint's request size limit.
+            Response<BlobDownloadResult> response = await blobClient
+                .DownloadContentAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            Stream content = response.Value.Content.ToStream();
+
+            LogDownloadSucceeded(blobName, content.Length);
+
+            return content;
+        }
+        catch (RequestFailedException exception) when (exception.Status == 404)
+        {
+            LogBlobNotFound(exception, blobName);
+            return Result.Failure<Stream>(BlobStorageErrors.BlobNotFound);
+        }
+        catch (RequestFailedException exception)
+        {
+            LogDownloadFailed(exception, blobName, exception.Status, exception.ErrorCode);
+            return Result.Failure<Stream>(BlobStorageErrors.DownloadFailed);
+        }
+        catch (AuthenticationFailedException exception)
+        {
+            LogAuthenticationFailed(exception);
+            return Result.Failure<Stream>(BlobStorageErrors.AuthenticationFailed);
+        }
+        catch (AggregateException exception)
+        {
+            // Retries exhausted at the transport level arrive here, not as
+            // RequestFailedException — the same trap the upload path guards.
+            LogTransportFailed(exception, blobName);
+            return Result.Failure<Stream>(BlobStorageErrors.DownloadFailed);
+        }
+    }
+
     /// <summary>
     /// Creates the container on first use, then remembers that it exists.
     /// </summary>
@@ -287,4 +338,22 @@ internal sealed partial class BlobStorageService : IBlobStorageService, IDisposa
         Level = LogLevel.Error,
         Message = "Azure Storage was unreachable for {Target} after all retries were exhausted.")]
     private partial void LogTransportFailed(Exception exception, string target);
+
+    [LoggerMessage(
+        EventId = 1006,
+        Level = LogLevel.Debug,
+        Message = "Read blob {BlobName} ({SizeInBytes} bytes).")]
+    private partial void LogDownloadSucceeded(string blobName, long sizeInBytes);
+
+    [LoggerMessage(
+        EventId = 1007,
+        Level = LogLevel.Error,
+        Message = "Blob {BlobName} was not found.")]
+    private partial void LogBlobNotFound(Exception exception, string blobName);
+
+    [LoggerMessage(
+        EventId = 1008,
+        Level = LogLevel.Error,
+        Message = "Failed to read blob {BlobName}. Storage returned {Status} ({ErrorCode}).")]
+    private partial void LogDownloadFailed(Exception exception, string blobName, int status, string? errorCode);
 }

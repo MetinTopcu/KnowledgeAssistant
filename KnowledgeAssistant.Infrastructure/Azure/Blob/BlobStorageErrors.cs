@@ -46,4 +46,22 @@ internal static class BlobStorageErrors
     internal static readonly Error AuthenticationFailed = Error.Failure(
         "Storage.AuthenticationFailed",
         "Document storage is currently unavailable.");
+
+    /// <summary>The requested blob does not exist.</summary>
+    /// <remarks>
+    /// Distinct from <see cref="DownloadFailed"/> because it means something
+    /// quite different: not that storage is unwell, but that the name being asked
+    /// for is wrong or the content has been removed. During ingestion it should be
+    /// unreachable — the blob was written moments earlier — and if it ever fires
+    /// there, the cause is a lifecycle policy or an external deletion rather than
+    /// a transient fault, and no amount of retrying will help.
+    /// </remarks>
+    internal static readonly Error BlobNotFound = Error.Failure(
+        "Storage.BlobNotFound",
+        "The stored document could not be found.");
+
+    /// <summary>The blob could not be read back.</summary>
+    internal static readonly Error DownloadFailed = Error.Failure(
+        "Storage.DownloadFailed",
+        "The stored document could not be read.");
 }

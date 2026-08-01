@@ -8,14 +8,20 @@ namespace KnowledgeAssistant.Application.Commands.Documents.Upload;
 /// <param name="ContentType">The MIME type declared by the client.</param>
 /// <param name="SizeInBytes">The number of bytes written to storage.</param>
 /// <param name="BlobName">The storage-relative name the document was written under.</param>
+/// <param name="ChunkCount">The number of searchable chunks the document produced.</param>
 /// <param name="ReceivedAtUtc">When the upload was accepted, in UTC.</param>
 /// <remarks>
 /// <para>
-/// <b>The content is now stored; its metadata is not.</b> As of Sprint 3 the
-/// bytes are in blob storage, but no database row records the document, so
-/// <paramref name="DocumentId"/> still cannot be resolved by a subsequent
-/// <c>GET</c>. It remains the caller's correlation handle for logs and support
-/// tickets.
+/// <b>A success here means the document is fully ingested.</b> The bytes are
+/// stored, the text is chunked, every chunk is embedded, and both indexes are
+/// written. <paramref name="ChunkCount"/> is the visible evidence of that: it is
+/// how many passages the document contributed to the retrieval index, and a
+/// caller can act on it — a large PDF that yields two chunks extracted badly.
+/// </para>
+/// <para>
+/// There is still no database row, so <paramref name="DocumentId"/> cannot be
+/// resolved by a subsequent <c>GET</c>. It remains the caller's correlation
+/// handle for logs and support tickets.
 /// </para>
 /// <para>
 /// The endpoint therefore still answers <c>200 OK</c> rather than
@@ -39,4 +45,5 @@ public sealed record UploadDocumentResponse(
     string ContentType,
     long SizeInBytes,
     string BlobName,
+    int ChunkCount,
     DateTimeOffset ReceivedAtUtc);
