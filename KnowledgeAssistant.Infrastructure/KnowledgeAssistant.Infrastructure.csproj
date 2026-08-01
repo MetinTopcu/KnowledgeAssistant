@@ -35,6 +35,15 @@
     <PackageReference Include="PdfPig" />
   </ItemGroup>
 
+  <!--
+    Retry and backoff for the embedding client. Confined to this project like
+    every other adapter concern: Application declares what it needs and knows
+    nothing about how many times a call was attempted.
+  -->
+  <ItemGroup Label="Resilience">
+    <PackageReference Include="Polly.Core" />
+  </ItemGroup>
+
   <ItemGroup Label="Hosting primitives">
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />

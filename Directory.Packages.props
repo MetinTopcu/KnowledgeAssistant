@@ -58,6 +58,17 @@
   </ItemGroup>
 
   <!--
+    Polly.Core rather than the Polly metapackage: it is the v8 resilience
+    pipeline API on its own, without the v7 Policy/PolicyWrap surface that
+    package also carries for backwards compatibility. The namespace is still
+    Polly; what is excluded is a deprecated API nothing here should be written
+    against.
+  -->
+  <ItemGroup Label="Infrastructure — Resilience">
+    <PackageVersion Include="Polly.Core" Version="8.7.0" />
+  </ItemGroup>
+
+  <!--
     The Microsoft.Extensions.* family is pinned to 10.0.x even though the apps
     target net9.0. These packages multi-target and run happily on net9.0; the
     10.x floor is forced transitively by Microsoft.Extensions.Azure and

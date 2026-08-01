@@ -1,4 +1,6 @@
+using System.ClientModel.Primitives;
 using Azure.AI.DocumentIntelligence;
+using Azure.AI.OpenAI;
 using Azure.Core;
 using Azure.Identity;
 using Azure.Search.Documents;
@@ -7,6 +9,7 @@ using KnowledgeAssistant.Application.Interfaces;
 using KnowledgeAssistant.Infrastructure.Azure.Blob;
 using KnowledgeAssistant.Infrastructure.Azure.Common;
 using KnowledgeAssistant.Infrastructure.Azure.DocumentIntelligence;
+using KnowledgeAssistant.Infrastructure.Azure.OpenAI;
 using KnowledgeAssistant.Infrastructure.Search;
 using KnowledgeAssistant.Infrastructure.Search.Chunking;
 using Microsoft.Extensions.Azure;
@@ -52,6 +55,7 @@ public static class InfrastructureServiceRegistration
         services.AddBlobStorage(configuration, credential);
         services.AddAzureSearch(configuration, credential);
         services.AddDocumentChunking(configuration, credential);
+        services.AddEmbeddings(configuration, credential);
 
         return services;
     }
@@ -273,6 +277,72 @@ public static class InfrastructureServiceRegistration
         }
 
         services.AddSingleton<IDocumentChunkingService, DocumentChunkingService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the Azure OpenAI client and the embedding adapter.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Registered by hand rather than through <c>AddAzureClients</c>.</b>
+    /// <see cref="AzureOpenAIClient"/> is built on System.ClientModel, not
+    /// Azure.Core: its options derive from <see cref="ClientPipelineOptions"/>
+    /// rather than <c>Azure.Core.ClientOptions</c>, so the
+    /// <c>Microsoft.Extensions.Azure</c> factory cannot construct it. Two
+    /// singletons are all that is needed, and the shared credential is passed
+    /// explicitly, so the outcome is the same.
+    /// </para>
+    /// <para>
+    /// <b>The SDK's own retry is switched off here</b>, and this is the reason to
+    /// read this method carefully. Every other adapter in this solution sets
+    /// <c>Retry.MaxRetries = 3</c> and relies on it. This one delegates retry to
+    /// Polly instead, and the two must not both be active: retry layers compose
+    /// multiplicatively, so four Polly attempts over three SDK retries is twelve
+    /// requests — sent, most likely, to a deployment that is already rejecting
+    /// calls for receiving too many. One layer owns the decision, and it is the
+    /// one that can read <c>Retry-After</c>.
+    /// </para>
+    /// </remarks>
+    private static IServiceCollection AddEmbeddings(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        DefaultAzureCredential credential)
+    {
+        services
+            .AddOptions<AzureOpenAIOptions>()
+            .Bind(configuration.GetSection(AzureOpenAIOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        AzureOpenAIOptions options =
+            configuration.GetSection(AzureOpenAIOptions.SectionName).Get<AzureOpenAIOptions>()
+            ?? new AzureOpenAIOptions();
+
+        services.AddSingleton(_ =>
+        {
+            var clientOptions = new AzureOpenAIClientOptions
+            {
+                // Polly owns retry. See the remarks above.
+                RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
+
+                // Bounds a single attempt. The overall wait is governed by the
+                // resilience pipeline, which is where the retry budget lives.
+                NetworkTimeout = TimeSpan.FromSeconds(100),
+            };
+
+            return new AzureOpenAIClient(ResolveEndpoint(options.Endpoint), credential, clientOptions);
+        });
+
+        // Derived from the parent client so both share one pipeline, one
+        // credential, and one token cache. The deployment name is bound here so
+        // that no other type needs to know it.
+        services.AddSingleton(provider =>
+            provider.GetRequiredService<AzureOpenAIClient>()
+                .GetEmbeddingClient(options.EmbeddingDeploymentName));
+
+        services.AddSingleton<IEmbeddingService, AzureOpenAIEmbeddingService>();
 
         return services;
     }
