@@ -240,6 +240,49 @@ internal sealed class FakeAzureSearchService(StageTrace trace) : IAzureSearchSer
     }
 }
 
+/// <summary>
+/// The agent port, scripted rather than simulated.
+/// </summary>
+/// <remarks>
+/// Deliberately dumb. What the agent decides to search for, and how often, is the
+/// adapter's concern and is tested against the adapter's own collaborators; the
+/// handler above it only has to shape whatever comes back. A fake that pretended
+/// to reason would test the fake.
+/// </remarks>
+internal sealed class FakeAgentService(StageTrace trace) : IAgentService
+{
+    public Error? Error { get; set; }
+
+    public string Answer { get; set; } = "The handbook says 42 [1].";
+
+    public int SearchCount { get; set; } = 1;
+
+    public TokenUsage? Usage { get; set; } = new(900, 60, 960);
+
+    public List<ChunkSearchResult> Sources { get; } =
+    [
+        new(Guid.CreateVersion7(), Guid.CreateVersion7(), 0, "first passage",
+            new Uri("https://acct.blob.core.windows.net/documents/a.pdf"), 0.9),
+        new(Guid.CreateVersion7(), Guid.CreateVersion7(), 1, "second passage",
+            new Uri("https://acct.blob.core.windows.net/documents/b.pdf"), 0.8),
+    ];
+
+    public AgentQuestion? ReceivedQuestion { get; private set; }
+
+    public int CallCount { get; private set; }
+
+    public Task<Result<AgentAnswer>> AskAsync(AgentQuestion question, CancellationToken cancellationToken)
+    {
+        trace.Record("Agent", cancellationToken);
+        CallCount++;
+        ReceivedQuestion = question;
+
+        return Task.FromResult(Error is not null
+            ? Result.Failure<AgentAnswer>(Error)
+            : Result.Success(new AgentAnswer(Answer, Sources, SearchCount, Usage)));
+    }
+}
+
 internal sealed class FakeChatService(StageTrace trace) : IChatService
 {
     public Error? Error { get; set; }

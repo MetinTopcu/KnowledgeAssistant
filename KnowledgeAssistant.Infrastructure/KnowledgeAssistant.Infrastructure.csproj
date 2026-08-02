@@ -11,6 +11,24 @@
     It references Application (to implement its interfaces) and Domain (its
     repositories return entities). It must never be referenced *by* Application.
   -->
+  <!--
+    OPENAI001 marks the OpenAI Responses API as evaluation-only: it is the type
+    set the Foundry agent data plane is built on (ResponseTool, ResponseItem,
+    ResponseResult), so the agent adapter cannot be written without touching it.
+    TreatWarningsAsErrors is on solution-wide, so the choice is to acknowledge the
+    diagnostic here or not to have the feature.
+
+    Scoped to this project deliberately, and this project is the only one that
+    could ever hit it — Application and Domain reference no vendor SDK at all, and
+    the architecture tests enforce that. What is suppressed is a stability warning,
+    not a correctness one: these types can change shape in a future OpenAI package,
+    which is a reason to pin the version (Directory.Packages.props does) and to
+    expect the agent adapter to need revisiting on a major bump.
+  -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);OPENAI001</NoWarn>
+  </PropertyGroup>
+
   <!-- See the Application project for why the adapters are internal and tested. -->
   <ItemGroup Label="Test visibility">
     <InternalsVisibleTo Include="KnowledgeAssistant.Tests.Unit" />
@@ -40,6 +58,9 @@
     <PackageReference Include="Azure.AI.DocumentIntelligence" />
     <PackageReference Include="Azure.AI.OpenAI" />
     <PackageReference Include="Azure.AI.Projects" />
+    <PackageReference Include="Azure.AI.Projects.Agents" />
+    <PackageReference Include="Azure.AI.Extensions.OpenAI" />
+    <PackageReference Include="OpenAI" />
     <PackageReference Include="Microsoft.Extensions.Azure" />
   </ItemGroup>
 

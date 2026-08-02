@@ -1,5 +1,6 @@
 using KnowledgeAssistant.Application.Commands.Documents.Upload;
 using KnowledgeAssistant.Application.Queries.Documents.Ask;
+using KnowledgeAssistant.Application.Queries.Documents.AskAgent;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace KnowledgeAssistant.Tests.Unit.Fakes;
@@ -39,6 +40,7 @@ internal sealed class PipelineRig
         VectorIndex = new FakeVectorIndexService(Trace);
         Search = new FakeAzureSearchService(Trace);
         Chat = new FakeChatService(Trace);
+        Agent = new FakeAgentService(Trace);
     }
 
     public StageTrace Trace { get; } = new();
@@ -54,6 +56,8 @@ internal sealed class PipelineRig
     public FakeAzureSearchService Search { get; }
 
     public FakeChatService Chat { get; }
+
+    public FakeAgentService Agent { get; }
 
     /// <summary>
     /// Builds the ingestion handler with the real validator.
@@ -83,4 +87,19 @@ internal sealed class PipelineRig
             Chat,
             TimeProvider.System,
             NullLogger<AskQuestionQueryHandler>.Instance);
+
+    /// <summary>Builds the agent handler with the real validator.</summary>
+    /// <remarks>
+    /// Note which fakes this one does <i>not</i> receive. The agent handler holds
+    /// no retrieval: embedding and search reach it only through the agent port, and
+    /// wiring them in here would let a test assert against a fake the handler
+    /// cannot reach — which is precisely the mistake a shared rig exists to make
+    /// impossible.
+    /// </remarks>
+    public AskAgentQueryHandler CreateAgentHandler() =>
+        new(
+            new AskAgentQueryValidator(),
+            Agent,
+            TimeProvider.System,
+            NullLogger<AskAgentQueryHandler>.Instance);
 }

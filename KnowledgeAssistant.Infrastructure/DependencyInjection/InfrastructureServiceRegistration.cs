@@ -5,7 +5,10 @@ using Azure.Core;
 using Azure.Identity;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
+using Azure.AI.Extensions.OpenAI;
+using Azure.AI.Projects.Agents;
 using KnowledgeAssistant.Application.Interfaces;
+using KnowledgeAssistant.Infrastructure.Azure.Agents;
 using KnowledgeAssistant.Infrastructure.Azure.Blob;
 using KnowledgeAssistant.Infrastructure.Azure.Common;
 using KnowledgeAssistant.Infrastructure.Azure.DocumentIntelligence;
@@ -16,6 +19,7 @@ using KnowledgeAssistant.Infrastructure.Search.Vectors;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace KnowledgeAssistant.Infrastructure.DependencyInjection;
@@ -57,6 +61,7 @@ public static class InfrastructureServiceRegistration
         services.AddAzureSearch(configuration, credential);
         services.AddDocumentChunking(configuration, credential);
         services.AddEmbeddings(configuration, credential);
+        services.AddFoundryAgent(configuration, credential);
 
         return services;
     }
@@ -359,6 +364,144 @@ public static class InfrastructureServiceRegistration
                 .GetChatClient(options.ChatDeploymentName));
 
         services.AddSingleton<IChatService, AzureOpenAIChatService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the Azure AI Foundry agent, its tool, and the clients behind them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Everything is built by hand here, as it is for embeddings, and for the
+    /// same reason.</b> The Foundry clients are System.ClientModel types: their
+    /// options derive from <see cref="ClientPipelineOptions"/> rather than
+    /// <c>Azure.Core.ClientOptions</c>, so the <c>Microsoft.Extensions.Azure</c>
+    /// factory cannot construct them. The shared credential is passed explicitly,
+    /// so the outcome is identical — one identity for every client in the process.
+    /// </para>
+    /// <para>
+    /// <b>The SDK's own retry is switched off on both clients</b>, exactly as it is
+    /// for the OpenAI client. Retry layers compose multiplicatively, so four Polly
+    /// attempts over three SDK retries is twelve requests sent to a service that is
+    /// most likely failing because it is already receiving too many. One layer owns
+    /// the decision, and it is the one that can read <c>Retry-After</c>.
+    /// </para>
+    /// <para>
+    /// <b>The retry budget is the OpenAI adapter's, deliberately.</b> The agent runs
+    /// on the same AI Foundry resource as chat and embeddings and is throttled by
+    /// the same quota, so <c>Azure:AiFoundry</c>'s retry settings govern all three.
+    /// A separate budget for the agent would be a second thing to tune and a second
+    /// thing to forget.
+    /// </para>
+    /// <para>
+    /// <b>Why the responses client is a factory rather than a registration.</b> It
+    /// is constructed against a specific agent version, and which version that is
+    /// can only be known after the first call resolves it. The delegate keeps the
+    /// endpoint, the credential, and the pipeline options chosen here with every
+    /// other client, and lets the adapter supply the one value it discovers.
+    /// </para>
+    /// </remarks>
+    private static IServiceCollection AddFoundryAgent(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        DefaultAzureCredential credential)
+    {
+        services
+            .AddOptions<FoundryAgentOptions>()
+            .Bind(configuration.GetSection(FoundryAgentOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        FoundryAgentOptions agentOptions =
+            configuration.GetSection(FoundryAgentOptions.SectionName).Get<FoundryAgentOptions>()
+            ?? new FoundryAgentOptions();
+
+        AzureOpenAIOptions openAIOptions =
+            configuration.GetSection(AzureOpenAIOptions.SectionName).Get<AzureOpenAIOptions>()
+            ?? new AzureOpenAIOptions();
+
+        // Both fall back to the parent AI Foundry settings when unset, so a
+        // single-project account needs no agent configuration at all. Resolved
+        // once, here, rather than at each use: whether a deployment separates its
+        // agent model from its chat model is a fact about the deployment, not
+        // about any individual question.
+        Uri projectEndpoint = ResolveEndpoint(
+            string.IsNullOrWhiteSpace(agentOptions.ProjectEndpoint)
+                ? openAIOptions.Endpoint
+                : agentOptions.ProjectEndpoint);
+
+        string modelDeploymentName = string.IsNullOrWhiteSpace(agentOptions.ModelDeploymentName)
+            ? openAIOptions.ChatDeploymentName
+            : agentOptions.ModelDeploymentName;
+
+        services.AddSingleton(provider =>
+        {
+            var clientOptions = new AgentAdministrationClientOptions
+            {
+                // Polly owns retry. See the remarks above.
+                RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
+                NetworkTimeout = TimeSpan.FromSeconds(30),
+            };
+
+            return new FoundryAgentProvisioner(
+                new AgentAdministrationClient(projectEndpoint, credential, clientOptions),
+                agentOptions,
+                modelDeploymentName,
+                OpenAIResiliencePipeline.Create(
+                    openAIOptions,
+                    provider.GetRequiredService<ILogger<FoundryAgentProvisioner>>(),
+                    "agent provisioning"),
+                provider.GetRequiredService<ILogger<FoundryAgentProvisioner>>());
+        });
+
+        services.AddSingleton<FoundryResponsesClientFactory>(_ => agent =>
+        {
+            var clientOptions = new ProjectResponsesClientOptions
+            {
+                RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
+
+                // Bounds a single attempt, and is longer than the other clients'
+                // because one turn of an agent run includes the model's reasoning
+                // rather than only a completion. The overall wait is still governed
+                // by the resilience pipeline.
+                NetworkTimeout = TimeSpan.FromSeconds(120),
+            };
+
+            return new ProjectResponsesClient(
+                projectEndpoint,
+                credential,
+                agent,
+
+                // No default conversation. Every question is answered on its own,
+                // which is the statelessness IAgentService promises; binding a
+                // conversation here would quietly turn the service multi-turn and
+                // start accumulating whatever people asked.
+                defaultConversationId: null,
+                clientOptions);
+        });
+
+        // The tool retrieves through the same two ports the retrieval slice uses,
+        // which is what makes "the agent's knowledge source is the existing RAG
+        // pipeline" a fact about the object graph rather than a claim.
+        services.AddSingleton(provider => new KnowledgeSearchTool(
+            provider.GetRequiredService<IEmbeddingService>(),
+            provider.GetRequiredService<IAzureSearchService>(),
+            agentOptions,
+            provider.GetRequiredService<ILogger<KnowledgeSearchTool>>()));
+
+        // Singleton: the resolved agent version, the responses client, and the
+        // retry state all live for the process. See the adapter's remarks.
+        services.AddSingleton<IAgentService>(provider => new AzureAIFoundryAgentService(
+            provider.GetRequiredService<FoundryResponsesClientFactory>(),
+            provider.GetRequiredService<FoundryAgentProvisioner>(),
+            provider.GetRequiredService<KnowledgeSearchTool>(),
+            agentOptions,
+            OpenAIResiliencePipeline.Create(
+                openAIOptions,
+                provider.GetRequiredService<ILogger<AzureAIFoundryAgentService>>(),
+                "agent"),
+            provider.GetRequiredService<ILogger<AzureAIFoundryAgentService>>()));
 
         return services;
     }

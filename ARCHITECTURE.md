@@ -254,6 +254,55 @@ leave an orphaned blob.
 
 ---
 
+## 5c. The agent, and why it is a second pipeline rather than a flag
+
+`POST /api/questions/agent` answers the same kind of question as `5b` by
+inverting who decides what to retrieve. The retrieval pipeline searches once and
+hands the model evidence; the agent is *given* the ability to search and decides
+whether, how often, and with what wording.
+
+```
+question → agent ⇄ search_knowledge_base (embed → vector search) → answer
+```
+
+**Its knowledge source is the pipeline in 5b, not a second one.** The agent's one
+tool runs in this process and calls `IEmbeddingService` and `IAzureSearchService`
+— the same two ports, in the same order, with the same retry policy and the same
+error codes. Azure AI Foundry offers a server-side Azure AI Search tool that would
+have removed that code entirely; it was rejected because it embeds queries with
+the *index's* vectorizer rather than with `IEmbeddingService`, so query and corpus
+vectors would come from two independently configured models. That failure does not
+raise an error — it returns plausible, wrong passages.
+
+**Tool registration is entirely inside Infrastructure; the instructions are
+entirely inside Application.** The function's name, its JSON schema, its dispatch,
+and the loop that answers its calls are vendor mechanics
+(`Infrastructure/Azure/Agents`). What the agent is *told* — search before
+answering, ground every claim, cite, decline when the corpus is silent — is a
+product rule (`Application/Agents/AgentInstructions`), for exactly the reason the
+grounded prompt is. Application never learns that a tool exists.
+
+**The search count is part of the response, not just the log.** An agent may
+answer without searching, and when it does the answer came from training data
+about documents it never opened — indistinguishable from a grounded answer by
+reading it. `SearchCount` is the only field that separates the two, which is why
+it is reported to the caller, counted as a metric, and logged as a warning.
+
+**Two bounded costs, because the product of two unbounded ones is unbounded.**
+`MaxSources` bounds one search; `MaxToolIterations` bounds how many searches there
+can be. Reaching the second is not an error: the agent is told searching is over
+and asked to answer with what it has, because a partial grounded answer beats a
+500.
+
+**Provisioning is fingerprinted.** The agent definition — model, instructions,
+temperature, tool schema — is hashed into the agent version's metadata, so a
+fleet converges on one version, a redeploy that changed nothing creates nothing,
+and editing the instructions creates a version precisely because they changed.
+Pinning `Azure:AiFoundry:Agent:Version` disables all of it, which is the
+production arrangement.
+
+---
+
 ## 6. Open decisions for you
 
 **`Api/Controllers` vs `Api/Endpoints` overlap.** Both were requested and both

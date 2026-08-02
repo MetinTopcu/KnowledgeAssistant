@@ -44,7 +44,20 @@ internal sealed class FakeAzureEnvironment
 
     public FakeChat Chat { get; } = new();
 
-    public FakeAzureEnvironment() => SearchIndex = new FakeSearchIndex(VectorIndex);
+    public FakeAgent Agent { get; }
+
+    public FakeAzureEnvironment()
+    {
+        SearchIndex = new FakeSearchIndex(VectorIndex);
+
+        // The agent searches through the same fake index ingestion wrote to, so
+        // "upload a document, then ask the agent about it" is one connected test
+        // rather than two sharing a process — exactly as it is for the retrieval
+        // endpoint. Substituting the agent port with something that invented its
+        // own sources would make the agent endpoint's tests prove nothing about
+        // whether the corpus reaches it.
+        Agent = new FakeAgent(Embeddings, SearchIndex);
+    }
 }
 
 /// <summary>Blob storage as a dictionary.</summary>
@@ -254,6 +267,83 @@ internal sealed class FakeSearchIndex(FakeVectorIndex vectorIndex) : IAzureSearc
         ];
 
         return Task.FromResult(Result.Success(results));
+    }
+}
+
+/// <summary>
+/// An agent that always searches once, through the same ports the real one uses.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>It substitutes the agent runtime, not the retrieval.</b> Foundry is what
+/// cannot be reached from an offline suite; the embedding and search behind the
+/// agent's tool are already faked in this file and are shared with ingestion. So
+/// this stands in for the model's decision to search — hardcoded to "once, with
+/// the question as written" — and lets everything downstream of that decision stay
+/// real. An agent fake that returned canned sources would leave the endpoint's
+/// tests unable to tell whether the corpus reached it at all.
+/// </para>
+/// <para>
+/// <see cref="SearchCount"/> is settable so a test can reproduce the case the
+/// response contract exists to expose: an agent that answered without looking
+/// anything up.
+/// </para>
+/// </remarks>
+internal sealed class FakeAgent(FakeEmbeddings embeddings, FakeSearchIndex searchIndex) : IAgentService
+{
+    public Error? Error { get; set; }
+
+    /// <summary>How many searches to report, and to actually perform.</summary>
+    public int SearchCount { get; set; } = 1;
+
+    public int CallCount { get; private set; }
+
+    public AgentQuestion? LastQuestion { get; private set; }
+
+    public async Task<Result<AgentAnswer>> AskAsync(
+        AgentQuestion question,
+        CancellationToken cancellationToken)
+    {
+        CallCount++;
+        LastQuestion = question;
+
+        if (Error is not null)
+        {
+            return Result.Failure<AgentAnswer>(Error);
+        }
+
+        var sources = new List<ChunkSearchResult>();
+
+        for (int search = 0; search < SearchCount; search++)
+        {
+            Result<ReadOnlyMemory<float>> vector = await embeddings
+                .GenerateEmbeddingAsync(question.Question, cancellationToken);
+
+            if (vector.IsFailure)
+            {
+                return Result.Failure<AgentAnswer>(vector.Error);
+            }
+
+            Result<IReadOnlyList<ChunkSearchResult>> found = await searchIndex
+                .SearchChunksAsync(vector.Value, question.MaxSources, cancellationToken);
+
+            if (found.IsFailure)
+            {
+                return Result.Failure<AgentAnswer>(found.Error);
+            }
+
+            // Deduplicated across searches, as the port promises. Repeated searches
+            // here return the same passages, which is precisely the case the
+            // promise exists for.
+            sources.AddRange(found.Value.Where(chunk =>
+                !sources.Any(existing => existing.ChunkId == chunk.ChunkId)));
+        }
+
+        string answer = string.Create(
+            CultureInfo.InvariantCulture,
+            $"Agent answer from {sources.Count} sources after {SearchCount} searches [1].");
+
+        return Result.Success(new AgentAnswer(answer, sources, SearchCount, new TokenUsage(900, 60, 960)));
     }
 }
 

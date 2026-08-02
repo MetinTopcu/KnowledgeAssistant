@@ -174,10 +174,30 @@ source of `403`s.
 | AI Search | `Search Index Data Contributor` (read/write documents) |
 | AI Search | `Search Service Contributor` (create/update the index) |
 | AI Foundry / OpenAI | `Cognitive Services OpenAI User` |
+| AI Foundry project | `Azure AI User` (run the agent) |
+| AI Foundry project | `Azure AI Project Manager` *(only if `Azure:AiFoundry:Agent:Version` is left empty)* |
 | Document Intelligence | `Cognitive Services User` *(only if an endpoint is configured)* |
 | Key Vault | `Key Vault Secrets User` |
 
 Grant the same roles to each developer's own account for local development.
+
+### The agent's write role is avoidable, and should be avoided
+
+`Azure AI Project Manager` is only needed because an empty
+`Azure:AiFoundry:Agent:Version` lets the running process create an agent version
+on the first question. That is convenient for a first run and wrong for
+production: it gives the application permission to modify the project it is
+supposed to only read from, and it puts the agent's instructions and tool schema
+outside the deployment that is meant to define them.
+
+Pin the version and the role goes away:
+
+1. Run once with the role granted, or provision the agent out of band.
+2. Take the version from the log line: `Created Foundry agent '...' version N`.
+3. Set `Azure:AiFoundry:Agent:Version` to it and drop the role assignment.
+
+With a version pinned, the app lists nothing and creates nothing — `Azure AI User`
+is sufficient.
 
 ### The vectorizer needs a role assignment on a *different* identity
 

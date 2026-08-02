@@ -1,5 +1,6 @@
 using KnowledgeAssistant.Api.Extensions;
 using KnowledgeAssistant.Application.Interfaces;
+using KnowledgeAssistant.Infrastructure.Azure.Agents;
 using KnowledgeAssistant.Infrastructure.Azure.Blob;
 using KnowledgeAssistant.Infrastructure.Azure.DocumentIntelligence;
 using KnowledgeAssistant.Infrastructure.Azure.OpenAI;
@@ -39,6 +40,7 @@ public sealed class DependencyInjectionTests
     [InlineData(typeof(IChatService))]
     [InlineData(typeof(IAzureSearchService))]
     [InlineData(typeof(IVectorIndexService))]
+    [InlineData(typeof(IAgentService))]
     [InlineData(typeof(ISender))]
     public void EveryPort_ResolvesFromTheRealContainer(Type portType)
     {
@@ -66,6 +68,12 @@ public sealed class DependencyInjectionTests
             .Should().BeSameAs(second.ServiceProvider.GetRequiredService<IBlobStorageService>());
         first.ServiceProvider.GetRequiredService<IVectorIndexService>()
             .Should().BeSameAs(second.ServiceProvider.GetRequiredService<IVectorIndexService>());
+
+        // The agent adapter caches the resolved agent version and the responses
+        // client built against it. A shorter lifetime would re-list agent versions
+        // — and possibly create one — on every question.
+        first.ServiceProvider.GetRequiredService<IAgentService>()
+            .Should().BeSameAs(second.ServiceProvider.GetRequiredService<IAgentService>());
     }
 
     [Fact]
@@ -98,6 +106,16 @@ public sealed class DependencyInjectionTests
             .MaxChunkSize.Should().Be(800);
         factory.Services.GetRequiredService<IOptions<DocumentIntelligenceOptions>>().Value
             .IsConfigured.Should().BeFalse();
+
+        // The agent section binds from committed defaults alone: the test settings
+        // supply nothing under Azure:AiFoundry:Agent, and the host still starts.
+        // That is the contract this options class was written to keep — adding the
+        // agent must not add a setting a deployment has to discover.
+        FoundryAgentOptions agent = factory.Services.GetRequiredService<IOptions<FoundryAgentOptions>>().Value;
+
+        agent.Name.Should().Be("knowledge-assistant");
+        agent.MaxToolIterations.Should().Be(4);
+        agent.IsVersionPinned.Should().BeFalse("an unpinned version is resolved on first use");
     }
 
     [Fact]

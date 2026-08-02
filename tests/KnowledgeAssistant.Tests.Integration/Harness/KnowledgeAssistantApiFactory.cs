@@ -20,7 +20,7 @@ namespace KnowledgeAssistant.Tests.Integration.Harness;
 /// way that only shows up over HTTP.
 /// </para>
 /// <para>
-/// <b>What is replaced, and where.</b> Only the five ports that would otherwise
+/// <b>What is replaced, and where.</b> Only the six ports that would otherwise
 /// call Azure, and only through <c>ConfigureTestServices</c> — which runs after
 /// <c>Program.cs</c> has registered everything, so the substitution is a genuine
 /// replacement of a registration that really happened. Substituting in
@@ -136,6 +136,7 @@ internal sealed class KnowledgeAssistantApiFactory : WebApplicationFactory<Progr
             Replace<IVectorIndexService>(services, Azure.VectorIndex);
             Replace<IAzureSearchService>(services, Azure.SearchIndex);
             Replace<IChatService>(services, Azure.Chat);
+            Replace<IAgentService>(services, Azure.Agent);
         });
     }
 
