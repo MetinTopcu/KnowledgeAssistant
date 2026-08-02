@@ -17,6 +17,17 @@
     <InternalsVisibleTo Include="KnowledgeAssistant.Tests.Integration" />
   </ItemGroup>
 
+  <!--
+    Health checks for this layer's own dependencies. Abstractions supplies
+    IHealthCheck; the non-abstractions package supplies AddHealthChecks(), which
+    this layer's composition root calls. Neither drags in ASP.NET Core — mapping
+    the endpoints stays entirely in the API.
+  -->
+  <ItemGroup Label="Diagnostics">
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\KnowledgeAssistant.Application\KnowledgeAssistant.Application.csproj" />
     <ProjectReference Include="..\KnowledgeAssistant.Domain\KnowledgeAssistant.Domain.csproj" />

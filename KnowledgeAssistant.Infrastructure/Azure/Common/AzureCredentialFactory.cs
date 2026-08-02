@@ -11,7 +11,20 @@ namespace KnowledgeAssistant.Infrastructure.Azure.Common;
 /// registration means the credential policy is one small testable unit rather
 /// than a private method buried in a composition root.
 /// </remarks>
-internal static class AzureCredentialFactory
+/// <remarks>
+/// <para>
+/// <b>Public as of the observability work.</b> The telemetry exporter in the API
+/// project authenticates to Azure Monitor with Entra ID like everything else
+/// here, so it needs this same policy. The alternative was to copy these few
+/// lines into the composition root, which is how two credential configurations
+/// drift until one deployment authenticates and the other does not.
+/// </para>
+/// <para>
+/// This is a factory over an already-public options type, not an adapter, so the
+/// convention that adapters stay internal is untouched.
+/// </para>
+/// </remarks>
+public static class AzureCredentialFactory
 {
     /// <summary>
     /// Creates a <see cref="DefaultAzureCredential"/> from configuration.
@@ -22,7 +35,7 @@ internal static class AzureCredentialFactory
     /// Visual Studio identity on a laptop and to managed identity in Azure. No key
     /// exists in either environment, so there is none to leak.
     /// </remarks>
-    internal static DefaultAzureCredential Create(AzureCredentialOptions options)
+    public static DefaultAzureCredential Create(AzureCredentialOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
 

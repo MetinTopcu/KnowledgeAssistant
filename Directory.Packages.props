@@ -27,6 +27,24 @@
     <PackageVersion Include="FluentValidation.DependencyInjectionExtensions" Version="12.1.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+
+    <!--
+      INSTRUMENTATION, NOT A TELEMETRY VENDOR. This package supplies
+      System.Diagnostics.ActivitySource and System.Diagnostics.Metrics.Meter —
+      the BCL types that .NET code calls to emit spans and measurements. The
+      OpenTelemetry SDK is only a *listener* for them, and it lives in the API
+      project. That separation is what lets the Application layer be fully
+      instrumented while staying free of any telemetry vendor: remove every
+      OpenTelemetry package from this solution and Application still compiles.
+
+      It was already present transitively at this exact version; declaring it
+      makes the dependency deliberate rather than inherited.
+    -->
+    <PackageVersion Include="System.Diagnostics.DiagnosticSource" Version="10.0.10" />
+
+    <!-- Supplies AddMetrics(), which registers the IMeterFactory the metrics
+         types resolve. Microsoft.Extensions.*, not a vendor SDK. -->
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics" Version="10.0.10" />
   </ItemGroup>
 
   <ItemGroup Label="Infrastructure — Azure">
@@ -90,6 +108,40 @@
   <ItemGroup Label="Api">
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="9.0.18" />
+  </ItemGroup>
+
+  <!--
+    Observability.
+
+    NOTE ON THE APPLICATION INSIGHTS CHOICE: this uses the OpenTelemetry
+    exporter, not the classic Microsoft.ApplicationInsights.AspNetCore SDK. The
+    classic SDK is in maintenance and carries its own parallel collection
+    pipeline, which would duplicate every span the OpenTelemetry instrumentation
+    already produces. The exporter is the path Microsoft documents for new work,
+    and it authenticates with Entra ID — so, like every other Azure dependency
+    here, there is no instrumentation key to keep out of source control.
+
+    These live only in the API project. Nothing below is referenced by
+    Application, Domain, or Infrastructure; see the Application group for why.
+  -->
+  <ItemGroup Label="Observability">
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
+    <PackageVersion Include="Azure.Monitor.OpenTelemetry.Exporter" Version="1.8.3" />
+  </ItemGroup>
+
+  <!--
+    Health checks. The abstractions package is what Infrastructure references so
+    it can define checks for its own dependencies without taking a dependency on
+    ASP.NET Core; the hosting side of health checks is in the framework and is
+    used only by the API.
+  -->
+  <ItemGroup Label="Health">
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.10" />
   </ItemGroup>
 
   <!--

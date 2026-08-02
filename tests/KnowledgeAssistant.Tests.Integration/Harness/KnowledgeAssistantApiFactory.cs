@@ -63,8 +63,33 @@ internal sealed class KnowledgeAssistantApiFactory : WebApplicationFactory<Progr
     /// branch which selects the local PdfPig extractor, and it is the branch these
     /// tests need in order to run without a network.
     /// </remarks>
+    /// <summary>
+    /// Settings applied after <see cref="Settings"/>, for a test that needs a
+    /// different configuration.
+    /// </summary>
+    /// <remarks>
+    /// Populate before the first call to <c>CreateClient</c>; the host is built
+    /// lazily on that call, and a value added afterwards arrives too late to be
+    /// read.
+    /// </remarks>
+    public Dictionary<string, string?> Overrides { get; } = new(StringComparer.Ordinal);
+
     public static Dictionary<string, string?> Settings => new(StringComparer.Ordinal)
     {
+        // Telemetry collection stays on — the pipeline behaviour, the activity
+        // source, and the instrumentation all run, so a test host exercises the
+        // same code path production does. Only the exporters are left
+        // unconfigured, which is what keeps the suite from trying to reach Azure
+        // Monitor.
+        ["Observability:AzureMonitor:ConnectionString"] = string.Empty,
+        ["Observability:Otlp:Endpoint"] = string.Empty,
+
+        // Readiness does not contact Azure by default. The endpoints, the tag
+        // predicates, and the response writer are all still genuinely exercised;
+        // what is suppressed is the network call behind them, which no offline
+        // suite could make. HealthEndpointTests overrides this where it matters.
+        ["Observability:HealthChecks:EnableDependencyChecks"] = "false",
+        ["Observability:HealthChecks:ExposeDetails"] = "true",
         ["Azure:Storage:ServiceUri"] = "https://fake.blob.core.windows.net/",
         ["Azure:Storage:DocumentsContainer"] = "documents",
         ["Azure:Search:Endpoint"] = "https://fake.search.windows.net/",
@@ -90,6 +115,11 @@ internal sealed class KnowledgeAssistantApiFactory : WebApplicationFactory<Progr
         // Settings supplied this way are part of the host configuration the
         // WebApplicationBuilder starts from, so they are visible early enough.
         foreach ((string key, string? value) in Settings)
+        {
+            builder.UseSetting(key, value);
+        }
+
+        foreach ((string key, string? value) in Overrides)
         {
             builder.UseSetting(key, value);
         }

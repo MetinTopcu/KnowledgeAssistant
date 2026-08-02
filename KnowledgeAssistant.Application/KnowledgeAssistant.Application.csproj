@@ -35,6 +35,23 @@
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+
+    <!--
+      Telemetry instrumentation, and the one place this project departs from
+      "abstractions only". Both are Microsoft.* / BCL, not vendor SDKs:
+
+        System.Diagnostics.DiagnosticSource supplies ActivitySource and Meter —
+        the types instrumented code calls. OpenTelemetry does not define that API
+        on .NET; it subscribes to it. So this layer is fully traced and metered
+        while remaining free of any telemetry vendor, and the fitness tests in
+        Tests.Architecture still pass unchanged.
+
+        Microsoft.Extensions.Diagnostics supplies AddMetrics(), so this layer's
+        composition root can register the IMeterFactory its instruments need
+        rather than requiring every host to know that.
+    -->
+    <PackageReference Include="System.Diagnostics.DiagnosticSource" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics" />
   </ItemGroup>
 
 </Project>
