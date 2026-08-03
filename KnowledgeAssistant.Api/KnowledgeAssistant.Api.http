@@ -1,6 +1,89 @@
-@KnowledgeAssistant.Api_HostAddress = http://localhost:5111
+### KnowledgeAssistant — request scratchpad
+#
+# Runs from Visual Studio, VS Code (REST Client), or Rider. Pick a host below.
+#
+# Nothing here carries a credential: the API authenticates to Azure as itself
+# via managed identity, and has no inbound auth of its own. Add one before
+# exposing it to anything but a private network.
 
-GET {{KnowledgeAssistant.Api_HostAddress}}/weatherforecast/
+@host = http://localhost:5111
+# @host = http://localhost:8080          # docker compose
+# @host = https://<your-app>.azurecontainerapps.io
+
+
+### Liveness — never touches a dependency, so 200 means "the process is up"
+GET {{host}}/health/live
 Accept: application/json
 
-###
+
+### Readiness — contacts Azure, so 503 means a dependency is unreachable
+GET {{host}}/health/ready
+Accept: application/json
+
+
+### Every check, for a human
+GET {{host}}/health
+Accept: application/json
+
+
+### OpenAPI document (Development only)
+GET {{host}}/openapi/v1.json
+Accept: application/json
+
+
+### Ingest a PDF
+# Replace the path. Max 20 MB; the form field must be named "file".
+POST {{host}}/api/documents
+Content-Type: multipart/form-data; boundary=----Boundary
+
+------Boundary
+Content-Disposition: form-data; name="file"; filename="handbook.pdf"
+Content-Type: application/pdf
+
+< ./sample/handbook.pdf
+------Boundary--
+
+
+### Ask — the retrieval pipeline
+# One embedding, one search, one completion. Predictable cost and latency.
+# A zero retrievedChunkCount is a success: the corpus had nothing relevant.
+POST {{host}}/api/questions
+Content-Type: application/json
+
+{
+  "question": "What is the refund policy?",
+  "topK": 5
+}
+
+
+### Ask — the agent
+# The agent decides whether, how often, and with what wording to search.
+# Read searchCount first: 0 means it answered without opening the corpus.
+POST {{host}}/api/questions/agent
+Content-Type: application/json
+
+{
+  "question": "How do the refund and return policies differ?",
+  "maxSources": 5
+}
+
+
+### Validation failure — expect 400 with code "Question.Missing"
+# Errors are RFC 7807 problem details. Branch on the code, never the message.
+POST {{host}}/api/questions
+Content-Type: application/json
+
+{
+  "question": "",
+  "topK": 5
+}
+
+
+### Validation failure — expect 400 with code "Question.InvalidTopK"
+POST {{host}}/api/questions
+Content-Type: application/json
+
+{
+  "question": "Anything at all?",
+  "topK": 999
+}

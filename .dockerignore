@@ -1,0 +1,67 @@
+# Docker build context.
+#
+# This file is a security boundary as much as a speed one. Everything the
+# context contains is uploaded to the daemon and is readable by any RUN
+# instruction and by anyone who later pulls an intermediate layer — so a stray
+# .env or secrets.json in the working tree would end up inside the image even
+# though no COPY names it. The secret rules near the bottom are the ones that
+# matter; the rest is build hygiene.
+#
+# Note the interaction with the Dockerfile: it copies only project files first
+# to cache `dotnet restore`, then copies the rest. Excluding bin/ and obj/ here
+# is what stops a host build's artefacts from leaking in and defeating that
+# cache — or worse, being published as the app.
+
+# ── Build output ───────────────────────────────────────────────────────────
+**/bin/
+**/obj/
+**/out/
+**/publish/
+**/TestResults/
+**/BenchmarkDotNet.Artifacts/
+**/*.user
+**/*.rsuser
+**/*.suo
+
+# ── IDE and tooling ────────────────────────────────────────────────────────
+.vs/
+.vscode/
+.idea/
+.claude/
+*.swp
+
+# ── Version control and CI ─────────────────────────────────────────────────
+# .git is the big one: it carries the entire history, which is usually larger
+# than the source and has no business inside an image.
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# ── Docker's own files ─────────────────────────────────────────────────────
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# ── Documentation and assets ───────────────────────────────────────────────
+# Excluded from the image, not from the repo. None of it is read at runtime.
+*.md
+docs/
+LICENSE
+
+# ── SECRETS — never allow these into a layer ───────────────────────────────
+# Each is gitignored too, so in a clean checkout none exists. These rules cover
+# the working tree of the person running `docker build`, which is where they
+# actually do exist.
+.env
+.env.*
+!.env.example
+**/secrets.json
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+**/local.settings.json
+**/*.pfx
+**/*.p12
+**/*.pem
+**/*.key

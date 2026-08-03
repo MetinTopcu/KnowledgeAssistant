@@ -1,0 +1,28 @@
+{
+  "//": [
+    "Pins the .NET SDK, so the same source produces the same build everywhere.",
+    "",
+    "This file exists because the build was NOT reproducible without it. The analyzer",
+    "set behind AnalysisLevel=latest-recommended is resolved by the SDK, and it changes",
+    "between feature bands: this solution compiled cleanly on 9.0.306 and failed on",
+    "9.0.316, where CA1716 is promoted and rejects the Domain type named Error. With",
+    "TreatWarningsAsErrors on and no pin, whether a clone builds depended on which SDK",
+    "the machine happened to have — the kind of failure that greets a new contributor",
+    "on their first clone and a release pipeline on its first upgraded runner.",
+    "",
+    "The 9.x line, not 10.x, because the projects target net9.0 and the container runs",
+    "mcr.microsoft.com/dotnet/aspnet:9.0 — build, target, and runtime should agree.",
+    "Building net9.0 with the 10.x SDK is supported and works, but it puts the toolchain",
+    "that compiles the code a major version ahead of the one that runs it, and analyzer",
+    "drift like the above is part of what that costs.",
+    "",
+    "rollForward latestFeature accepts any 9.0.x the machine has, so a routine patch",
+    "update does not break the build. It will NOT roll forward to 10.x: contributors need",
+    "a .NET 9 SDK. CI installs it from this file; the Dockerfile pins the matching image."
+  ],
+  "sdk": {
+    "version": "9.0.100",
+    "rollForward": "latestFeature",
+    "allowPrerelease": false
+  }
+}

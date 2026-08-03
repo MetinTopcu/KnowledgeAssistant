@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace KnowledgeAssistant.Domain.Common;
 
 /// <summary>
@@ -18,6 +20,17 @@ namespace KnowledgeAssistant.Domain.Common;
 /// failures at once.
 /// </para>
 /// </remarks>
+[SuppressMessage(
+    "Naming",
+    "CA1716:Identifiers should not match keywords",
+    Justification =
+        "'Error' is the conventional name for the failure half of the Result pattern, and it is " +
+        "the vocabulary every layer of this solution is written in. The rule guards against " +
+        "consumers in languages where 'Error' is reserved — chiefly Visual Basic — which is not a " +
+        "trade this codebase is making: renaming would touch Domain, Application, Infrastructure, " +
+        "and every test, to serve a caller that does not exist. Suppressed at the declaration " +
+        "rather than project-wide so a genuinely new keyword clash still fails the build. " +
+        "Note this fires only on some SDK feature bands, which is why global.json pins one.")]
 public record Error(string Code, string Description, ErrorType Type)
 {
     /// <summary>

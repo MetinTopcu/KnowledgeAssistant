@@ -1,0 +1,106 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  KnowledgeAssistant — local development stack
+#
+#      cp .env.example .env      # then fill in your endpoints
+#      az login                  # the container reuses this login
+#      docker compose up --build
+#
+#      API      http://localhost:8080
+#      Health   http://localhost:8080/health
+#      Traces   http://localhost:18888
+#
+#  ── There is no emulator here, and that is deliberate ──────────────────────
+#
+#  Azure AI Search and Azure AI Foundry have no local emulator, so this stack
+#  talks to real Azure resources. Azurite would cover blob storage alone, and
+#  adding it would be worse than useless: Azurite authenticates with a well-known
+#  account key, while every client in this solution is built exclusively around
+#  DefaultAzureCredential. Wiring it in would mean adding a key-based code path
+#  that exists only to make a demo work — the one thing CONFIGURATION.md's "the
+#  secret does not exist" guarantee is there to prevent.
+#
+#  So: bring your own Azure resources, and authenticate with your own identity.
+#  See DEPLOYMENT.md for provisioning them and the roles you need.
+# ═══════════════════════════════════════════════════════════════════════════
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_CONFIGURATION: Debug
+    image: knowledge-assistant-api:local
+    container_name: knowledge-assistant-api
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      # Development turns on the OpenAPI document at /openapi/v1.json. It does
+      # NOT relax any validation: every options class is still ValidateOnStart,
+      # so a missing endpoint fails this container at boot rather than on the
+      # first request.
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+
+      # Sends traces and metrics to the dashboard below. Overrides whatever is
+      # in .env, because inside this network the collector is always this host.
+      Observability__Otlp__Endpoint: http://aspire-dashboard:18889
+
+      # The az-CLI token cache is mounted at a fixed path below; this tells the
+      # Azure SDK where to look for it inside the container.
+      AZURE_CONFIG_DIR: /home/app/.azure
+
+    # Endpoints and deployment names come from .env, which is gitignored.
+    # Compose reads it automatically. Nothing in it is a credential.
+    env_file:
+      - .env
+
+    volumes:
+      # Your `az login` token cache, read-only.
+      #
+      # ro is not decoration. The cache holds live refresh tokens for your own
+      # account; a writable mount would let anything in the container modify or
+      # replace them. Read-only is enough for DefaultAzureCredential, which only
+      # reads.
+      #
+      # Set AZURE_CONFIG_DIR in .env to your host path — Docker cannot expand ~.
+      - "${AZURE_CONFIG_DIR:?set AZURE_CONFIG_DIR in .env to your .azure directory — see .env.example}:/home/app/.azure:ro"
+
+    depends_on:
+      aspire-dashboard:
+        condition: service_started
+
+    healthcheck:
+      # Liveness, matching the Dockerfile: this decides whether to restart the
+      # container, and restarting cannot fix an unreachable Azure dependency.
+      test: ["CMD", "/usr/bin/timeout", "3", "/bin/bash", "-c",
+             "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health/live HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200 OK'"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  # The .NET Aspire dashboard, used here purely as a standalone OTLP collector
+  # and trace viewer. The application already emits OpenTelemetry through BCL
+  # types and exports over OTLP when Observability:Otlp:Endpoint is set — this
+  # gives that somewhere to go without an Azure Monitor workspace, so a laptop
+  # can see the same spans production does.
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:9.0
+    container_name: knowledge-assistant-traces
+    restart: unless-stopped
+
+    ports:
+      - "18888:18888"   # UI
+      - "18889:18889"   # OTLP/gRPC ingest
+
+    environment:
+      # Local-only, and the reason this compose file must never be used as a
+      # deployment template: it disables the dashboard's login token so the UI
+      # opens without one. Anyone who can reach the port can read every trace,
+      # which is fine on loopback and unacceptable anywhere else.
+      DASHBOARD__FRONTEND__AUTHMODE: Unsecured
+      DASHBOARD__OTLP__AUTHMODE: Unsecured

@@ -381,8 +381,15 @@ FodyWeavers.xsd
 secrets.json
 
 # Environment
+#
+# The negation is load-bearing. `.env.*` matches `.env.example` too, so without
+# the exception the committed template is silently ignored: `git add .env.example`
+# does nothing, `git status` never mentions it, and the first person to clone the
+# repo finds a README that references a file which is not there. A negation must
+# come after the pattern it re-includes, so do not reorder these.
 .env
 .env.*
+!.env.example
 
 # App Settings — local-only overrides.
 # The committed templates are the *.example.json files, which must never
