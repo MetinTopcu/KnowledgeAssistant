@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="Ask questions of your own documents and get answers that cite their sources."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>KnowledgeAssistant</title>
+  </head>
+  <body>
+    <!-- The dark class is set on <html> above rather than only by ThemeProvider
+         so the first paint matches the default theme. Setting it in script would
+         still leave one light frame; setting it in markup leaves none. -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

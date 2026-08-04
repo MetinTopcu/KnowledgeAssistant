@@ -1,0 +1,437 @@
+@import '@fontsource-variable/inter';
+@import 'tailwindcss';
+
+/*
+ * Design tokens — the implementation of docs/DESIGN.md §9.
+ *
+ * Three tiers, and the tiers are the point:
+ *   primitive  raw values, referenced only by the semantic tier below
+ *   semantic   what components reference, and the only tier that changes by theme
+ *   utility    Tailwind's generated classes, mapped from the semantic tier
+ *
+ * A component that reaches past the semantic tier to a primitive has hard-coded
+ * a light-theme value into a themeable product. Nothing here should name a
+ * --gray-* or --blue-* variable outside the two blocks that define the semantic
+ * tier.
+ */
+
+/* Theme is applied by class rather than by media query alone, because the
+   product offers an explicit System / Light / Dark choice. ThemeProvider owns
+   the class; the media query only informs what "System" resolves to. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+
+  /* ── Primitives · neutral ─────────────────────────────────────────── */
+  --gray-0: #ffffff;
+  --gray-1: #f6f7f9;
+  --gray-2: #eff1f4;
+  --gray-3: #e6e9ed;
+  --gray-4: #d8dce2;
+  --gray-5: #6b747e;
+  --gray-6: #56606b;
+  --gray-7: #39424e;
+  --gray-8: #262c35;
+  --gray-9: #1a1f27;
+  --gray-10: #14181f;
+  --gray-11: #0e1116;
+
+  /* A dedicated ink tone rather than a ramp step: --gray-10 carries a blue
+     cast that reads as a tint at body-text size on white. */
+  --ink: #14171a;
+
+  /* ── Primitives · blue (interactive) ──────────────────────────────── */
+  --blue-1: #eaf2fe;
+  --blue-2: #cfe2fd;
+  --blue-3: #539bf5;
+  --blue-4: #1f6feb;
+  --blue-5: #0b5fce;
+  --blue-6: #0a4fa8;
+  --blue-7: #08315f;
+
+  /* ── Primitives · status hues ─────────────────────────────────────── */
+  --green-light: #1a7f37;
+  --green-dark: #3fb950;
+  --green-emphasis-dark: #238636;
+  --amber-light: #9a6700;
+  --amber-emphasis-light: #bf8700;
+  --amber-dark: #d29922;
+  --amber-emphasis-dark: #9e6a03;
+  --red-light: #cf222e;
+  --red-dark: #f85149;
+  --red-emphasis-dark: #da3633;
+
+  /* ── Semantic · surfaces ──────────────────────────────────────────── */
+  --canvas-base: var(--gray-0);
+  --canvas-subtle: var(--gray-1);
+  --canvas-inset: var(--gray-2);
+  --canvas-overlay: var(--gray-0);
+  --canvas-hover: rgb(0 0 0 / 3.5%);
+  --canvas-selected: var(--blue-1);
+
+  /* ── Semantic · borders ───────────────────────────────────────────── */
+  --border-muted: var(--gray-3);
+  --border-default: var(--gray-4);
+  --border-strong: #b9c0c9;
+
+  /* ── Semantic · foreground ────────────────────────────────────────── */
+  --fg-default: var(--ink);
+  --fg-muted: var(--gray-6);
+  --fg-subtle: var(--gray-5);
+  --fg-on-emphasis: var(--gray-0);
+
+  /* ── Semantic · accent ────────────────────────────────────────────── */
+  --accent-fg: var(--blue-5);
+  --accent-emphasis: #0a5ac2;
+  --accent-subtle: var(--blue-1);
+
+  /* ── Semantic · status ────────────────────────────────────────────── */
+  --success-fg: var(--green-light);
+  --success-emphasis: var(--green-light);
+  --success-subtle: #e6f4ea;
+  --attention-fg: var(--amber-light);
+  --attention-emphasis: var(--amber-emphasis-light);
+  --attention-subtle: #fff6e0;
+  --danger-fg: var(--red-light);
+  --danger-emphasis: var(--red-light);
+  --danger-subtle: #fdecee;
+
+  --focus-ring: var(--blue-5);
+
+  /* ── Semantic · elevation (§9.6) ──────────────────────────────────── */
+  --elevation-1: 0 1px 1px rgb(0 0 0 / 6%), 0 4px 12px rgb(0 0 0 / 10%);
+  --elevation-2: 0 2px 4px rgb(0 0 0 / 8%), 0 12px 32px rgb(0 0 0 / 14%);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --canvas-base: var(--gray-11);
+  --canvas-subtle: var(--gray-10);
+  --canvas-inset: var(--gray-9);
+  --canvas-overlay: #191e26;
+  --canvas-hover: rgb(255 255 255 / 4.5%);
+  --canvas-selected: rgb(31 111 235 / 16%);
+
+  --border-muted: #1e242c;
+  --border-default: var(--gray-8);
+  --border-strong: var(--gray-7);
+
+  --fg-default: #e6e9ee;
+  --fg-muted: #9ba5b1;
+  --fg-subtle: #6e7783;
+  --fg-on-emphasis: var(--gray-0);
+
+  --accent-fg: var(--blue-3);
+  --accent-emphasis: var(--blue-4);
+  --accent-subtle: rgb(31 111 235 / 15%);
+
+  --success-fg: var(--green-dark);
+  --success-emphasis: var(--green-emphasis-dark);
+  --success-subtle: rgb(63 185 80 / 15%);
+  --attention-fg: var(--amber-dark);
+  --attention-emphasis: var(--amber-emphasis-dark);
+  --attention-subtle: rgb(210 153 34 / 15%);
+  --danger-fg: var(--red-dark);
+  --danger-emphasis: var(--red-emphasis-dark);
+  --danger-subtle: rgb(248 81 73 / 15%);
+
+  --focus-ring: var(--blue-3);
+
+  /* Diffuse shadow is nearly invisible on #0E1116, so elevation in dark is
+     carried by a 1px ring first and the shadow only adds depth behind it. */
+  --elevation-1: 0 0 0 1px var(--gray-7), 0 8px 24px rgb(0 0 0 / 40%);
+  --elevation-2: 0 0 0 1px var(--gray-7), 0 16px 48px rgb(0 0 0 / 55%);
+}
+
+@theme inline {
+  /* ── Color (§9.2) ─────────────────────────────────────────────────── */
+  --color-canvas-base: var(--canvas-base);
+  --color-canvas-subtle: var(--canvas-subtle);
+  --color-canvas-inset: var(--canvas-inset);
+  --color-canvas-overlay: var(--canvas-overlay);
+  --color-canvas-hover: var(--canvas-hover);
+  --color-canvas-selected: var(--canvas-selected);
+
+  --color-border-muted: var(--border-muted);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  --color-fg-default: var(--fg-default);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-fg-on-emphasis: var(--fg-on-emphasis);
+
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-emphasis: var(--accent-emphasis);
+  --color-accent-subtle: var(--accent-subtle);
+
+  --color-success-fg: var(--success-fg);
+  --color-success-emphasis: var(--success-emphasis);
+  --color-success-subtle: var(--success-subtle);
+  --color-attention-fg: var(--attention-fg);
+  --color-attention-emphasis: var(--attention-emphasis);
+  --color-attention-subtle: var(--attention-subtle);
+  --color-danger-fg: var(--danger-fg);
+  --color-danger-emphasis: var(--danger-emphasis);
+  --color-danger-subtle: var(--danger-subtle);
+
+  --color-focus-ring: var(--focus-ring);
+
+  /* ── Typography (§9.3) ────────────────────────────────────────────── */
+  --font-sans:
+    'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI', -apple-system, system-ui, sans-serif;
+  --font-mono: 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --text-display: 24px;
+  --text-display--line-height: 32px;
+  --text-display--font-weight: 600;
+  --text-display--letter-spacing: -0.02em;
+
+  --text-h1: 20px;
+  --text-h1--line-height: 28px;
+  --text-h1--font-weight: 600;
+  --text-h1--letter-spacing: -0.015em;
+
+  --text-h2: 16px;
+  --text-h2--line-height: 24px;
+  --text-h2--font-weight: 600;
+  --text-h2--letter-spacing: -0.01em;
+
+  --text-h3: 14px;
+  --text-h3--line-height: 20px;
+  --text-h3--font-weight: 600;
+
+  /* The one place reading beats density. */
+  --text-answer: 15px;
+  --text-answer--line-height: 24px;
+
+  --text-body: 14px;
+  --text-body--line-height: 22px;
+
+  --text-ui: 13px;
+  --text-ui--line-height: 20px;
+
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+
+  --text-mono-body: 13px;
+  --text-mono-body--line-height: 20px;
+
+  --text-mono-ui: 12px;
+  --text-mono-ui--line-height: 18px;
+
+  --text-mono-chip: 11px;
+  --text-mono-chip--line-height: 16px;
+  --text-mono-chip--font-weight: 500;
+
+  /* ── Sizing (§9.4) ────────────────────────────────────────────────── */
+  /* Tailwind's default 4px spacing step already expresses every value on the
+     spacing scale, so only the named shell and control sizes are declared. */
+  --spacing-rail: 240px;
+  --spacing-rail-collapsed: 48px;
+  --spacing-topbar: 48px;
+  --spacing-statusbar: 24px;
+  --spacing-inspector: 400px;
+  --spacing-inspector-min: 320px;
+  --spacing-inspector-max: 640px;
+
+  --spacing-control-sm: 28px;
+  --spacing-control-md: 32px;
+  --spacing-control-lg: 40px;
+
+  --spacing-row-compact: 32px;
+  --spacing-row-default: 36px;
+  --spacing-row-relaxed: 44px;
+
+  /* ── Measure (§7) ─────────────────────────────────────────────────── */
+  --container-answer: 72ch;
+  --container-chunk: 96ch;
+  --container-empty: 44ch;
+  --container-error: 480px;
+  --container-dialog: 520px;
+  --container-palette: 640px;
+  --container-content: 1440px;
+
+  /* ── Radius (§9.5) — nothing above 6px ────────────────────────────── */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  /* ── Elevation (§9.6) ─────────────────────────────────────────────── */
+  --shadow-elevation-1: var(--elevation-1);
+  --shadow-elevation-2: var(--elevation-2);
+
+  /* ── Motion (§9.7) — one curve for entrances, one for dismissals ──── */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  --animate-skeleton: skeleton 1.6s ease-in-out infinite;
+  --animate-overlay-in: fade-in 120ms var(--ease-standard);
+  --animate-dialog-in: fade-in 200ms var(--ease-standard);
+  --animate-panel-in: slide-in-right 160ms var(--ease-standard);
+  --animate-progress-indeterminate: progress-indeterminate 1.4s var(--ease-standard) infinite;
+}
+
+/*
+ * Breakpoints (§7). The defaults are cleared rather than extended: leaving
+ * Tailwind's `sm`/`2xl` in place alongside these would give two sets of names
+ * for the same axis, and the wrong one is one keystroke away.
+ *
+ * Below `md` is the design's `sm` tier, so it needs no name — it is the base.
+ */
+@theme {
+  --breakpoint-*: initial;
+  --breakpoint-md: 900px;
+  --breakpoint-lg: 1280px;
+  --breakpoint-xl: 1680px;
+}
+
+@keyframes skeleton {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
+/* Opacity only. A dialog that also slides would need a transform, and the
+   transform slot is already spent centring it — animating both is how a
+   centred dialog ends up 4px off. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Translate only — a panel that also faded would read as uncertain about
+   whether it had arrived. */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* The one looping animation in the system, and it earns the exception: an
+   indeterminate bar that does not move is indistinguishable from a stalled
+   determinate one. */
+@keyframes progress-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+
+/* ── Motion durations (§9.7) ────────────────────────────────────────── */
+@utility duration-instant {
+  transition-duration: 80ms;
+}
+@utility duration-fast {
+  transition-duration: 120ms;
+}
+@utility duration-base {
+  transition-duration: 160ms;
+}
+@utility duration-slow {
+  transition-duration: 200ms;
+}
+
+/* ── Stacking order (§9.8) ──────────────────────────────────────────── */
+@utility z-sticky {
+  z-index: 100;
+}
+@utility z-rail {
+  z-index: 200;
+}
+@utility z-dropdown {
+  z-index: 300;
+}
+@utility z-overlay {
+  z-index: 400;
+}
+@utility z-dialog {
+  z-index: 500;
+}
+@utility z-toast {
+  z-index: 600;
+}
+@utility z-tooltip {
+  z-index: 700;
+}
+
+/* ── Eyebrow (§9.3) ─────────────────────────────────────────────────── */
+/* A composite rather than a font-size token, because the uppercase transform
+   and tracking are inseparable from the size at 11px. */
+@utility eyebrow {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@layer base {
+  /* Separation is a 1px line, so the default border colour matters more here
+     than in most systems: `border` alone should already be correct. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border-default);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--canvas-base);
+    color: var(--fg-default);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 22px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Uniform, never removed, never restyled per component (§9.9). */
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--accent-subtle);
+  }
+
+  /* Numbers that sit in columns must not wobble between renders. */
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* If motion were removed entirely, nothing would break (§9.7). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
