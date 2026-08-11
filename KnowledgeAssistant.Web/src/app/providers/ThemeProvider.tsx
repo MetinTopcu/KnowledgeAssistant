@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { ThemeContext, type ThemeContextValue } from '@/app/providers/themeContext';
+import { ThemeContext, type ThemeContextValue } from '@/shared/theme/themeContext';
 import {
   applyTheme,
   readThemePreference,

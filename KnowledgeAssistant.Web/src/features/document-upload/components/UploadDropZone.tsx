@@ -24,7 +24,7 @@ const PICKER_HINT = 'application/pdf,.pdf';
  * constants change server-side, this text goes stale — which is a wrong label,
  * not a wrong behaviour.
  */
-const ACCEPTED_DESCRIPTION = 'PDF (.pdf) · maximum file size 20 MB';
+const ACCEPTED_DESCRIPTION = 'PDF only · maximum 20 MB';
 
 interface UploadDropZoneProps {
   readonly onFilesSelected: (files: readonly File[]) => void;

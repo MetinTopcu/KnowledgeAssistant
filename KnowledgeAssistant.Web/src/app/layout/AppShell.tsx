@@ -6,13 +6,13 @@ import { NavRail } from '@/app/layout/NavRail';
 import { SkipToContentLink } from '@/app/layout/SkipToContentLink';
 import { StatusBar } from '@/app/layout/StatusBar';
 import { TopBar } from '@/app/layout/TopBar';
-import { useTheme } from '@/app/providers/useTheme';
 import { UploadAction } from '@/features/document-upload/components/UploadAction';
 import { useDocumentTitle } from '@/app/router/useDocumentTitle';
 import { useNavigationChords } from '@/app/router/useNavigationChords';
 import { useRouteTitle } from '@/app/router/useRouteTitle';
 import { useKeyboardShortcut } from '@/shared/hooks/useKeyboardShortcut';
 import { useMediaQuery } from '@/shared/hooks/useMediaQuery';
+import { useTheme } from '@/shared/theme/useTheme';
 
 const MAIN_CONTENT_ID = 'main-content';
 
@@ -68,6 +68,13 @@ export function AppShell() {
     // the rail and gives a screen reader something to announce.
     if (!hasNavigated.current) {
       hasNavigated.current = true;
+      return;
+    }
+
+    // A screen that focuses its own control — Ask focuses the composer — has
+    // made a better choice than the shell can. Only claim focus when the new
+    // screen has not already placed it somewhere inside itself.
+    if (mainRef.current?.contains(document.activeElement)) {
       return;
     }
 

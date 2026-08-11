@@ -1,4 +1,4 @@
-import axios, { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 
 import { ApiRequestError } from '@/shared/api/ApiRequestError';
 import {
@@ -7,6 +7,7 @@ import {
   extractProblemErrors,
   type ApiProblem,
 } from '@/shared/api/apiProblem';
+import { readHeader } from '@/shared/api/readHeader';
 import { env } from '@/shared/config/env';
 
 /**
@@ -63,11 +64,6 @@ function parseRetryAfter(value: string | undefined): number | undefined {
   return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
 }
 
-function headerValue(response: AxiosResponse | undefined, name: string): string | undefined {
-  const value = response?.headers[name] as unknown;
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
 function requestCorrelationId(error: AxiosError): string | undefined {
   const value = error.config?.headers.get(CORRELATION_ID_HEADER);
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -99,9 +95,9 @@ function toApiProblem(error: AxiosError): ApiProblem {
     errors,
     // Falls back to the id this client sent, so a request that never reached
     // the server is still reportable against something the server can search.
-    correlationId: headerValue(response, CORRELATION_ID_HEADER) ?? requestCorrelationId(error),
-    traceId: headerValue(response, TRACE_ID_HEADER) ?? bodyString(body, 'traceId'),
-    retryAfterSeconds: parseRetryAfter(headerValue(response, 'retry-after')),
+    correlationId: readHeader(response, CORRELATION_ID_HEADER) ?? requestCorrelationId(error),
+    traceId: readHeader(response, TRACE_ID_HEADER) ?? bodyString(body, 'traceId'),
+    retryAfterSeconds: parseRetryAfter(readHeader(response, 'retry-after')),
     isNetworkError: response === undefined,
   };
 }

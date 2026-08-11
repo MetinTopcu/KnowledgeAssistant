@@ -1,9 +1,9 @@
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { type LucideIcon } from 'lucide-react';
 
-import { useTheme } from '@/app/providers/useTheme';
 import { Button } from '@/shared/components/Button';
 import { type ThemePreference } from '@/shared/theme/theme';
+import { useTheme } from '@/shared/theme/useTheme';
 
 /** The cycle order, chosen so a single press leaves "system" for an explicit choice. */
 const CYCLE: readonly ThemePreference[] = ['system', 'light', 'dark'];
@@ -34,9 +34,9 @@ interface ThemeToggleProps {
  *
  * A cycle rather than a menu because the rail footer has room for one control,
  * not a popover. The label announces the current value and the next one, so the
- * cycle is stated rather than discovered by pressing it three times. Settings
- * (Slice 6) offers the explicit three-way choice docs/DESIGN.md §6.8 specifies;
- * this is the shortcut, not the setting.
+ * cycle is stated rather than discovered by pressing it three times. Settings ›
+ * Appearance offers the explicit three-way choice docs/DESIGN.md §6.8
+ * specifies; this is the shortcut, not the setting.
  */
 export function ThemeToggle({ showLabel }: ThemeToggleProps) {
   const { preference, setPreference } = useTheme();

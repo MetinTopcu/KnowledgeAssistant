@@ -8,6 +8,7 @@
  */
 export const routePaths = {
   ask: '/',
+  agent: '/agent',
   runs: '/runs',
   documents: '/documents',
   status: '/status',
