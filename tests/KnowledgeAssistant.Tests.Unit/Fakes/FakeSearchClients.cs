@@ -41,13 +41,20 @@ internal sealed class FakeAzureResponse : Response
 }
 
 /// <summary>
-/// A <see cref="SearchClient"/> that records the batches it was sent and can be
-/// scripted to fail.
+/// A <see cref="SearchClient"/> that records the batches and queries it was sent
+/// and can be scripted to fail.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Reports per-document outcomes inside a successful response, which is the
-/// condition the vector adapter exists to catch: Azure AI Search answers 200 for
+/// condition the indexing adapters exist to catch: Azure AI Search answers 200 for
 /// a batch in which individual documents were rejected.
+/// </para>
+/// <para>
+/// Search responses are built with the SDK's own <see cref="SearchModelFactory"/>,
+/// so the adapter enumerates a genuine <see cref="SearchResults{T}"/> rather than
+/// a stand-in shaped like one.
+/// </para>
 /// </remarks>
 internal sealed class FakeSearchClient : SearchClient
 {
@@ -63,6 +70,50 @@ internal sealed class FakeSearchClient : SearchClient
 
     /// <summary>Returns fewer results than documents sent, when non-negative.</summary>
     public int TruncateResultsTo { get; set; } = -1;
+
+    public int SearchCallCount { get; private set; }
+
+    /// <summary>The search text of the most recent query; null for a pure vector query.</summary>
+    public string? LastSearchText { get; private set; }
+
+    /// <summary>The options of the most recent query, exactly as the adapter built them.</summary>
+    public SearchOptions? LastSearchOptions { get; private set; }
+
+    /// <summary>The cancellation token the most recent query was issued with.</summary>
+    public CancellationToken LastSearchToken { get; private set; }
+
+    /// <summary>
+    /// The hits the next query returns, as <c>SearchResult&lt;T&gt;</c> for the
+    /// document type the adapter searches with.
+    /// </summary>
+    public List<object> SearchHits { get; } = [];
+
+    public override Task<Response<SearchResults<T>>> SearchAsync<T>(
+        string? searchText,
+        SearchOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        SearchCallCount++;
+        LastSearchText = searchText;
+        LastSearchOptions = options;
+        LastSearchToken = cancellationToken;
+
+        if (ThrowNext is not null)
+        {
+            Exception exception = ThrowNext;
+            ThrowNext = null;
+            throw exception;
+        }
+
+        SearchResults<T> results = SearchModelFactory.SearchResults(
+            SearchHits.Cast<SearchResult<T>>(),
+            totalCount: null,
+            facets: null,
+            coverage: null,
+            rawResponse: new FakeAzureResponse());
+
+        return Task.FromResult(Response.FromValue(results, new FakeAzureResponse()));
+    }
 
     public override Task<Response<IndexDocumentsResult>> MergeOrUploadDocumentsAsync<T>(
         IEnumerable<T> documents,
@@ -106,6 +157,11 @@ internal sealed class FakeSearchClient : SearchClient
 /// A <see cref="SearchIndexClient"/> that records index provisioning and hands
 /// out a scripted <see cref="FakeSearchClient"/>.
 /// </summary>
+/// <remarks>
+/// Hands out the same client for every index unless one is registered for a
+/// specific name in <see cref="ClientsByIndex"/>, which is how a test tells a
+/// write to the document index apart from a query against the chunk index.
+/// </remarks>
 internal sealed class FakeSearchIndexClient(FakeSearchClient searchClient) : SearchIndexClient
 {
     public bool IndexExists { get; set; }
@@ -116,13 +172,37 @@ internal sealed class FakeSearchIndexClient(FakeSearchClient searchClient) : Sea
 
     public int GetCallCount { get; private set; }
 
-    public override SearchClient GetSearchClient(string indexName) => searchClient;
+    public int StatisticsCallCount { get; private set; }
+
+    /// <summary>Clients for specific index names, overriding the default one.</summary>
+    public Dictionary<string, FakeSearchClient> ClientsByIndex { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Every index name a search client was requested for, in order.</summary>
+    public List<string> RequestedClientNames { get; } = [];
+
+    /// <summary>Thrown by the next <c>GetIndexAsync</c>, then cleared.</summary>
+    public Exception? ThrowNextGet { get; set; }
+
+    /// <summary>Thrown by the next <c>CreateIndexAsync</c>, then cleared.</summary>
+    public Exception? ThrowNextCreate { get; set; }
+
+    /// <summary>Thrown by the next <c>GetServiceStatisticsAsync</c>, then cleared.</summary>
+    public Exception? ThrowNextStatistics { get; set; }
+
+    public override SearchClient GetSearchClient(string indexName)
+    {
+        RequestedClientNames.Add(indexName);
+
+        return ClientsByIndex.TryGetValue(indexName, out FakeSearchClient? specific) ? specific : searchClient;
+    }
 
     public override Task<Response<SearchIndex>> GetIndexAsync(
         string indexName,
         CancellationToken cancellationToken = default)
     {
         GetCallCount++;
+
+        ThrowIfScripted(ThrowNextGet, () => ThrowNextGet = null);
 
         if (!IndexExists)
         {
@@ -137,9 +217,35 @@ internal sealed class FakeSearchIndexClient(FakeSearchClient searchClient) : Sea
         CancellationToken cancellationToken = default)
     {
         CreateCallCount++;
+
+        ThrowIfScripted(ThrowNextCreate, () => ThrowNextCreate = null);
+
         CreatedIndex = index;
         IndexExists = true;
 
         return Task.FromResult(Response.FromValue(index, new FakeAzureResponse()));
+    }
+
+    public override Task<Response<SearchServiceStatistics>> GetServiceStatisticsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        StatisticsCallCount++;
+
+        ThrowIfScripted(ThrowNextStatistics, () => ThrowNextStatistics = null);
+
+        SearchServiceStatistics statistics = SearchModelFactory.SearchServiceStatistics(
+            SearchModelFactory.SearchServiceCounters(null, null, null, null, null, null),
+            SearchModelFactory.SearchServiceLimits(null, null, null, null));
+
+        return Task.FromResult(Response.FromValue(statistics, new FakeAzureResponse()));
+    }
+
+    private static void ThrowIfScripted(Exception? exception, Action clear)
+    {
+        if (exception is not null)
+        {
+            clear();
+            throw exception;
+        }
     }
 }
