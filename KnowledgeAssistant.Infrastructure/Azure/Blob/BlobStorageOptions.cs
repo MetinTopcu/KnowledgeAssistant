@@ -17,11 +17,19 @@ namespace KnowledgeAssistant.Infrastructure.Azure.Blob;
 /// keeps host-level settings the web layer itself owns.
 /// </para>
 /// <para>
-/// <b>No key or connection string.</b> A connection string embeds an account
-/// key, which is the credential this design is built to avoid holding.
-/// Authentication is Entra ID via <c>DefaultAzureCredential</c>, so the only
-/// configuration needed is where the account is and which container to use —
-/// neither of which is a secret.
+/// <b>No account key in any real environment.</b> A connection string embeds an
+/// account key, which is the credential this design is built to avoid holding.
+/// Authentication against Azure is Entra ID via <c>DefaultAzureCredential</c>,
+/// so the only configuration needed is where the account is and which container
+/// to use — neither of which is a secret.
+/// </para>
+/// <para>
+/// <b>The one exception is the local emulator.</b> <see cref="ConnectionString"/>
+/// exists so a laptop can run against Azurite, which accepts only shared-key
+/// authentication over plain HTTP. It cannot become a back door for a real key:
+/// <see cref="BlobStorageOptionsValidator"/> refuses it outside the Development
+/// environment, and refuses any connection string that is not Azurite's own
+/// <c>devstoreaccount1</c> with the key Microsoft publishes in its documentation.
 /// </para>
 /// <para>
 /// <b>Nor does the credential itself live here.</b> One <c>TokenCredential</c>
@@ -39,9 +47,25 @@ public sealed class BlobStorageOptions
     /// The blob service endpoint, for example
     /// <c>https://contoso.blob.core.windows.net/</c>.
     /// </summary>
-    [Required(AllowEmptyStrings = false, ErrorMessage = "Azure:Storage:ServiceUri must be configured.")]
-    [Url(ErrorMessage = "Azure:Storage:ServiceUri must be an absolute URL.")]
+    /// <remarks>
+    /// Required unless <see cref="ConnectionString"/> is set. The rule is
+    /// conditional, so it is enforced by <see cref="BlobStorageOptionsValidator"/>
+    /// rather than by attributes, with the same messages the attributes produced.
+    /// </remarks>
     public string ServiceUri { get; init; } = string.Empty;
+
+    /// <summary>
+    /// An Azurite connection string, for local development only. Empty everywhere
+    /// else.
+    /// </summary>
+    /// <remarks>
+    /// Setting it replaces <see cref="ServiceUri"/> and
+    /// <c>DefaultAzureCredential</c> for the blob client alone; every other Azure
+    /// client is unaffected. Accepted only in the Development environment, and
+    /// only for the <c>devstoreaccount1</c> emulator account — see
+    /// <see cref="BlobStorageOptionsValidator"/>.
+    /// </remarks>
+    public string ConnectionString { get; init; } = string.Empty;
 
     /// <summary>The container documents are written to.</summary>
     /// <remarks>
@@ -55,4 +79,10 @@ public sealed class BlobStorageOptions
         "^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){1,61}[a-z0-9]$",
         ErrorMessage = "Azure:Storage:DocumentsContainer must be 3-63 characters of lowercase letters, digits, and non-consecutive hyphens.")]
     public string DocumentsContainer { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Whether the blob client should be built from the Azurite connection string
+    /// rather than from <see cref="ServiceUri"/> and the shared credential.
+    /// </summary>
+    public bool UsesDevelopmentStorage => !string.IsNullOrWhiteSpace(ConnectionString);
 }

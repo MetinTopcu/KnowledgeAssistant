@@ -8,19 +8,20 @@
 #      API      http://localhost:8080
 #      Health   http://localhost:8080/health
 #      Traces   http://localhost:18888
+#      Azurite  http://localhost:10000/devstoreaccount1
 #
-#  ── There is no emulator here, and that is deliberate ──────────────────────
+#  ── Blob storage is emulated; everything else is real Azure ────────────────
 #
-#  Azure AI Search and Azure AI Foundry have no local emulator, so this stack
-#  talks to real Azure resources. Azurite would cover blob storage alone, and
-#  adding it would be worse than useless: Azurite authenticates with a well-known
-#  account key, while every client in this solution is built exclusively around
-#  DefaultAzureCredential. Wiring it in would mean adding a key-based code path
-#  that exists only to make a demo work — the one thing CONFIGURATION.md's "the
-#  secret does not exist" guarantee is there to prevent.
+#  Documents are stored in Azurite, the local Blob Storage emulator, so uploads
+#  cost nothing and need no storage account. Azure AI Search and Azure AI
+#  Foundry have no emulator, so those still come from .env and your own login.
 #
-#  So: bring your own Azure resources, and authenticate with your own identity.
-#  See DEPLOYMENT.md for provisioning them and the roles you need.
+#  Azurite accepts only its well-known shared key, over plain HTTP. The API
+#  therefore reaches it through Azure:Storage:ConnectionString — a path the
+#  application refuses outside the Development environment, and refuses for any
+#  account other than devstoreaccount1 with Azurite's published key. Deployed
+#  environments keep Azure:Storage:ServiceUri and DefaultAzureCredential; see
+#  DEPLOYMENT.md. The key below is public and identical on every installation.
 # ═══════════════════════════════════════════════════════════════════════════
 
 services:
@@ -53,6 +54,15 @@ services:
       # Azure SDK where to look for it inside the container.
       AZURE_CONFIG_DIR: /home/app/.azure
 
+      # Blob storage goes to the azurite service below. Set here rather than in
+      # .env so it overrides whatever .env says: `environment` takes precedence
+      # over `env_file`. ServiceUri is emptied deliberately, because the
+      # application refuses to start with both set. BlobEndpoint names the
+      # compose service, not 127.0.0.1, which inside this container is the API
+      # itself.
+      Azure__Storage__ServiceUri: ""
+      Azure__Storage__ConnectionString: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
+
     # Endpoints and deployment names come from .env, which is gitignored.
     # Compose reads it automatically. Nothing in it is a credential.
     env_file:
@@ -71,6 +81,8 @@ services:
 
     depends_on:
       aspire-dashboard:
+        condition: service_started
+      azurite:
         condition: service_started
 
     healthcheck:
@@ -104,3 +116,28 @@ services:
       # which is fine on loopback and unacceptable anywhere else.
       DASHBOARD__FRONTEND__AUTHMODE: Unsecured
       DASHBOARD__OTLP__AUTHMODE: Unsecured
+
+  # Local Blob Storage emulator. Blob service only: the queue and table services
+  # are not started because nothing in this solution uses them.
+  azurite:
+    # Pinned, not :latest. Azurite rejects requests whose x-ms-version it does
+    # not recognise, and Azure.Storage.Blobs 12.29.1 sends 2026-06-06, so an
+    # unpinned image could silently start refusing every call after a pull.
+    image: mcr.microsoft.com/azure-storage/azurite:3.37.0
+    container_name: knowledge-assistant-azurite
+    restart: unless-stopped
+
+    # 0.0.0.0 because Azurite binds loopback by default, which inside a
+    # container is unreachable from both the API container and the host.
+    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--location", "/data"]
+
+    ports:
+      - "10000:10000"
+
+    volumes:
+      # Named volume, so uploaded documents survive `docker compose down`.
+      # `docker compose down -v` is the reset.
+      - azurite-data:/data
+
+volumes:
+  azurite-data:

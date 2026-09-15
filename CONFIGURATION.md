@@ -1,7 +1,9 @@
 # Configuration & Secrets
 
 **Local development uses .NET User Secrets. Production uses environment
-variables. No API key or connection string is ever committed.**
+variables. No real Azure API key, account key, or connection string is ever
+committed.** The one committed connection string is Azurite's public,
+Development-only `devstoreaccount1` credential — see §1.
 
 ---
 
@@ -20,6 +22,15 @@ exist. This solution authenticates to Azure with **Entra ID via
 What remains in `appsettings.json` is endpoints, container names, deployment
 names, and tuning values — none of which are credentials. A leaked endpoint is
 not an incident; a leaked account key is.
+
+**The local Blob Storage emulator is the single exception.** Azurite accepts only
+shared-key authentication, so in the Development environment
+`Azure:Storage:ConnectionString` may point the blob client at Azurite using the
+standard public `devstoreaccount1` credential, which is identical on every
+installation and is not a secret. The application refuses that setting outside
+Development, and refuses any account or key other than Azurite's, so no real
+Azure account key can be used through this path. Production Azure Blob Storage
+always uses `Azure:Storage:ServiceUri` + `DefaultAzureCredential`.
 
 Keys are supported as a fallback (some environments still require them), but
 they belong **only** in user secrets locally and Key Vault in production — never
@@ -80,6 +91,10 @@ dotnet user-secrets set "Azure:AiFoundry:Endpoint"  "https://<resource>.services
 dotnet user-secrets set "Azure:AiFoundry:ChatDeploymentName"      "gpt-4o-mini"
 dotnet user-secrets set "Azure:AiFoundry:EmbeddingDeploymentName" "text-embedding-3-small"
 ```
+
+Set `Azure:Storage:ServiceUri` only if you use a real dev storage account.
+`appsettings.Development.example.json` defaults to Azurite through
+`Azure:Storage:ConnectionString`, and the host refuses to start with both set.
 
 ```powershell
 dotnet user-secrets list      # show all

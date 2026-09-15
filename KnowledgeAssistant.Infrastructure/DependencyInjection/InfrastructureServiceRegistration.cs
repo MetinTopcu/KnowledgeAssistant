@@ -2,8 +2,10 @@ using System.ClientModel.Primitives;
 using Azure.AI.DocumentIntelligence;
 using Azure.AI.OpenAI;
 using Azure.Core;
+using Azure.Core.Extensions;
 using Azure.Identity;
 using Azure.Search.Documents;
+using Azure.Storage.Blobs;
 using Azure.Search.Documents.Indexes;
 using Azure.AI.Extensions.OpenAI;
 using Azure.AI.Projects.Agents;
@@ -19,6 +21,7 @@ using KnowledgeAssistant.Infrastructure.Search.Vectors;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -100,6 +103,13 @@ public static class InfrastructureServiceRegistration
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
+        // ServiceUri is required only when no Azurite connection string is set,
+        // and the connection string is allowed only in Development. Neither rule
+        // fits an attribute, so both live in the validator. ValidateOnStart above
+        // runs it too.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<BlobStorageOptions>, BlobStorageOptionsValidator>());
+
         // Read once here so the client factory below has an endpoint to build
         // from. The registration above still governs what the running
         // application sees, so validation is not bypassed.
@@ -109,8 +119,18 @@ public static class InfrastructureServiceRegistration
 
         services.AddAzureClients(clientBuilder =>
         {
-            clientBuilder
-                .AddBlobServiceClient(ResolveServiceUri(options))
+            // Two ways to build the same client, with the same retry settings.
+            // The ServiceUri path is the production one: it authenticates with the
+            // shared credential below. The connection-string path exists only for
+            // Azurite, which accepts shared-key auth over plain HTTP and nothing
+            // else. The validator refuses it outside Development, so a deployed
+            // host that reaches this branch fails at startup. That client ignores
+            // UseCredential, and every other client still uses it.
+            IAzureClientBuilder<BlobServiceClient, BlobClientOptions> blobClient = options.UsesDevelopmentStorage
+                ? clientBuilder.AddBlobServiceClient(options.ConnectionString)
+                : clientBuilder.AddBlobServiceClient(ResolveServiceUri(options));
+
+            blobClient
                 .ConfigureOptions(clientOptions =>
                 {
                     // The storage SDK defaults to 5 retries with a long backoff,

@@ -13,9 +13,11 @@ with the passages it was built from, so it can be checked rather than trusted.
 
 It is written as a reference implementation of Clean Architecture and Vertical
 Slice Architecture on Azure — the layer boundaries are enforced by tests, not by
-convention, and **there is not a single API key or connection string in the
-codebase**. Every Azure dependency authenticates with Entra ID through
-`DefaultAzureCredential`.
+convention, and **there is not a single real Azure API key, account key, or
+connection string in the codebase**. Every Azure dependency authenticates with
+Entra ID through `DefaultAzureCredential`. The only committed connection string
+is Azurite's public, Development-only `devstoreaccount1` credential for local
+Blob Storage.
 
 ---
 
@@ -190,12 +192,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the reasoning behind each boundary.
 | Mediation | MediatR 12.4.1 | Last Apache-2.0 release; v13+ requires a commercial licence |
 | Validation | FluentValidation | Rules live with the slice, reachable by non-HTTP callers |
 | Resilience | Polly.Core 8 | v8 pipelines only, without the deprecated v7 surface |
-| Storage | Azure Blob Storage | Account URI, never a connection string |
+| Storage | Azure Blob Storage | Account URI in Azure; Azurite connection string in Development only |
 | Retrieval | Azure AI Search | Two indexes: one per document, one per chunk |
 | AI | Azure AI Foundry | Embeddings, chat, and the agent on one resource |
 | PDF | PdfPig 0.1.15 | Apache-2.0; iText was rejected as AGPL |
 | Telemetry | OpenTelemetry + Azure Monitor exporter | Inner layers emit through BCL types only |
-| Auth | Entra ID via `DefaultAzureCredential` | No key exists, so none can leak |
+| Auth | Entra ID via `DefaultAzureCredential` | No real Azure key exists, so none can leak |
 | Tests | xUnit, FluentAssertions 7.2.2, NetArchTest | 7.2.2 is the last Apache-2.0 release |
 
 ---
@@ -253,10 +255,15 @@ are referenced from code comments; they are documentation, not placeholders.
   [DEPLOYMENT.md](DEPLOYMENT.md) for provisioning and the RBAC roles you need
 - **Docker** (optional, for the container path)
 
-> There is no local emulator path. Azure AI Search and AI Foundry have none, and
-> adding Azurite for blob alone would mean introducing a key-based code path that
-> exists only to make a demo work — the one thing this codebase's "the secret does
-> not exist" guarantee is there to prevent.
+> **Blob Storage can run locally on Azurite.** Set
+> `Azure:Storage:ConnectionString` to `UseDevelopmentStorage=true` (and leave
+> `Azure:Storage:ServiceUri` empty) to use an Azurite instance on
+> `127.0.0.1:10000`; `docker compose up` starts one and points the API at it.
+> The application accepts a connection string **only in the Development
+> environment and only for Azurite's `devstoreaccount1` with its published key**,
+> so no real account key can take this path. Every deployed environment keeps
+> `ServiceUri` + `DefaultAzureCredential`. Azure AI Search and AI Foundry have no
+> emulator and still need real resources.
 
 ### Run with the .NET CLI
 
@@ -289,6 +296,7 @@ docker compose up --build
 | API | <http://localhost:8080> |
 | Health | <http://localhost:8080/health> |
 | Traces | <http://localhost:18888> (Aspire dashboard) |
+| Azurite (Blob) | <http://localhost:10000/devstoreaccount1> |
 
 Compose mounts your `az login` token cache read-only so the container
 authenticates as you — there is no credential to configure.
@@ -410,10 +418,16 @@ store or rotate, mirroring how the application itself avoids credentials.
 
 ## Security
 
-No API key, connection string, or client secret exists anywhere in this
-repository — not in configuration, not in CI, not in the container image.
-Everything authenticates with Entra ID through `DefaultAzureCredential`: your own
-identity locally, a managed identity in Azure.
+No real Azure API key, account key, connection string, or client secret exists
+anywhere in this repository — not in configuration, not in CI, not in the
+container image. Every Azure resource is reached with Entra ID through
+`DefaultAzureCredential`: your own identity locally, a managed identity in Azure.
+
+The one exception is local Blob Storage. `docker-compose.yml` and
+`appsettings.Development.example.json` configure Azurite with its standard public
+`devstoreaccount1` credential, which is not a secret. The application accepts that
+connection string only in the Development environment and only for Azurite's
+account and published key, so no real Azure account key can be used through it.
 
 If you believe you have found a vulnerability, please open a private security
 advisory rather than a public issue.
