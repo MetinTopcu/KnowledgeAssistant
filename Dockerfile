@@ -52,8 +52,14 @@ COPY KnowledgeAssistant.Api/*.csproj             KnowledgeAssistant.Api/
 # absent from this image — they are run by CI, not built into a release
 # artefact, and pulling xunit and the test SDK in here would add weight to a
 # layer that ships nothing.
-RUN --mount=type=cache,target=/root/.nuget/packages \
-    dotnet restore KnowledgeAssistant.Api/KnowledgeAssistant.Api.csproj
+#
+# The packages are written into this layer, not into a BuildKit cache mount. A
+# cache mount is not part of the layer cache, and CI exports only the layer
+# cache (cache-to: type=gha): a fresh runner would then reuse this layer as
+# "already restored" while its package folder is empty, and the --no-restore
+# build below fails with NETSDK1064. In the layer, the packages travel with the
+# cache hit. This stage is never shipped, so they add nothing to the image.
+RUN dotnet restore KnowledgeAssistant.Api/KnowledgeAssistant.Api.csproj
 
 # Source last, so everything above is reused whenever only code has changed.
 COPY KnowledgeAssistant.Domain/          KnowledgeAssistant.Domain/
@@ -63,8 +69,7 @@ COPY KnowledgeAssistant.Api/             KnowledgeAssistant.Api/
 
 # --no-restore because the layer above already did it; without the flag this
 # would restore again and the cache above would buy nothing.
-RUN --mount=type=cache,target=/root/.nuget/packages \
-    dotnet build KnowledgeAssistant.Api/KnowledgeAssistant.Api.csproj \
+RUN dotnet build KnowledgeAssistant.Api/KnowledgeAssistant.Api.csproj \
         --configuration $BUILD_CONFIGURATION \
         --no-restore
 
@@ -76,8 +81,7 @@ ARG BUILD_CONFIGURATION=Release
 # UseAppHost=false drops the native launcher executable. The image starts the
 # app with `dotnet KnowledgeAssistant.Api.dll`, so the apphost is dead weight —
 # and one fewer platform-specific binary in the artefact.
-RUN --mount=type=cache,target=/root/.nuget/packages \
-    dotnet publish KnowledgeAssistant.Api/KnowledgeAssistant.Api.csproj \
+RUN dotnet publish KnowledgeAssistant.Api/KnowledgeAssistant.Api.csproj \
         --configuration $BUILD_CONFIGURATION \
         --no-restore \
         --output /app/publish \
