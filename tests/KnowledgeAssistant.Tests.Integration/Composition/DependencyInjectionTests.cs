@@ -107,15 +107,15 @@ public sealed class DependencyInjectionTests
         factory.Services.GetRequiredService<IOptions<DocumentIntelligenceOptions>>().Value
             .IsConfigured.Should().BeFalse();
 
-        // The agent section binds from committed defaults alone: the test settings
-        // supply nothing under Azure:AiFoundry:Agent, and the host still starts.
-        // That is the contract this options class was written to keep — adding the
-        // agent must not add a setting a deployment has to discover.
+        // The agent section: the two required values bind from the test settings,
+        // everything else from committed defaults.
         FoundryAgentOptions agent = factory.Services.GetRequiredService<IOptions<FoundryAgentOptions>>().Value;
 
+        agent.ProjectEndpoint.Should().Be("https://fake.services.ai.azure.com/api/projects/fake-project");
+        agent.Version.Should().Be("1");
         agent.Name.Should().Be("knowledge-assistant");
         agent.MaxToolIterations.Should().Be(4);
-        agent.IsVersionPinned.Should().BeFalse("an unpinned version is resolved on first use");
+        agent.Temperature.Should().BeNull("an unset temperature is left to the model");
     }
 
     [Fact]
@@ -147,6 +147,32 @@ public sealed class DependencyInjectionTests
         failures.OfType<OptionsValidationException>()
             .SelectMany(failure => failure.Failures)
             .Should().NotBeEmpty("the failure must name the settings that are missing");
+    }
+
+    [Theory]
+    [InlineData("Azure:AiFoundry:Agent:ProjectEndpoint", "", "ProjectEndpoint must be configured")]
+    [InlineData("Azure:AiFoundry:Agent:ProjectEndpoint", "https://fake.services.ai.azure.com/", "the account endpoint does not serve agents")]
+    [InlineData("Azure:AiFoundry:Agent:Version", "", "Version must be set outside Development")]
+    [InlineData("Azure:AiFoundry:EmbeddingDimensions", "1536", "produces 3072-dimensional vectors")]
+    public void AnInvalidAgentOrEmbeddingSetting_StopsTheHostNamingIt(string key, string value, string expected)
+    {
+        // Each of these used to surface only on the first agent question or the
+        // first upload — as a 404, an unpinned agent, or a dimension mismatch
+        // after a blob was already written. Now the host does not start.
+        using var factory = new KnowledgeAssistantApiFactory(substituteAzureServices: false);
+        factory.Overrides[key] = value;
+
+        Exception? thrown = Record.Exception(() => factory.CreateClient());
+
+        thrown.Should().NotBeNull();
+
+        IEnumerable<Exception> failures = thrown is AggregateException aggregate
+            ? aggregate.Flatten().InnerExceptions
+            : [thrown!];
+
+        failures.OfType<OptionsValidationException>()
+            .SelectMany(failure => failure.Failures)
+            .Should().Contain(message => message.Contains(expected, StringComparison.Ordinal));
     }
 
     [Fact]

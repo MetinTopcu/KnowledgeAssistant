@@ -2,9 +2,8 @@ import { ArrowDown, ArrowUp, FileText } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { type DocumentSummary } from '@/features/documents/model/documentSummary';
-import { formatBytes } from '@/shared/lib/formatBytes';
 
-type SortKey = 'fileName' | 'sizeInBytes' | 'chunkCount' | 'receivedAtUtc';
+type SortKey = 'fileName' | 'blobName' | 'uploadedAtUtc';
 type SortDirection = 'asc' | 'desc';
 
 interface DocumentsTableProps {
@@ -12,12 +11,7 @@ interface DocumentsTableProps {
 }
 
 function compare(left: DocumentSummary, right: DocumentSummary, key: SortKey): number {
-  const a = left[key];
-  const b = right[key];
-
-  return typeof a === 'number' && typeof b === 'number'
-    ? a - b
-    : String(a).localeCompare(String(b));
+  return left[key].localeCompare(right[key]);
 }
 
 /**
@@ -28,9 +22,13 @@ function compare(left: DocumentSummary, right: DocumentSummary, key: SortKey): n
  * headers — so the two screens read as one product rather than as two tables
  * that happen to share a palette. No column is derived or judged: every cell is
  * a field the server sent, formatted but not interpreted.
+ *
+ * Size and chunk count are absent because the listing endpoint does not return
+ * them: the search index never stored them. A column of dashes would be a
+ * worse answer than no column, and a zero would be a false one.
  */
 export function DocumentsTable({ documents }: DocumentsTableProps) {
-  const [sortKey, setSortKey] = useState<SortKey>('receivedAtUtc');
+  const [sortKey, setSortKey] = useState<SortKey>('uploadedAtUtc');
   const [direction, setDirection] = useState<SortDirection>('desc');
 
   const sorted = useMemo(() => {
@@ -72,14 +70,11 @@ export function DocumentsTable({ documents }: DocumentsTableProps) {
             <th scope="col" className="px-3 text-left">
               {renderSortableHeader('fileName', 'Document')}
             </th>
-            <th scope="col" className="w-24 px-3 text-left">
-              {renderSortableHeader('sizeInBytes', 'Size')}
-            </th>
-            <th scope="col" className="w-24 px-3 text-left">
-              {renderSortableHeader('chunkCount', 'Chunks')}
+            <th scope="col" className="w-64 px-3 text-left">
+              {renderSortableHeader('blobName', 'Stored as')}
             </th>
             <th scope="col" className="w-44 px-3 text-left">
-              {renderSortableHeader('receivedAtUtc', 'Ingested')}
+              {renderSortableHeader('uploadedAtUtc', 'Ingested')}
             </th>
             <th scope="col" className="w-40 px-3 text-left text-fg-subtle">
               <span className="eyebrow">Document id</span>
@@ -88,7 +83,7 @@ export function DocumentsTable({ documents }: DocumentsTableProps) {
         </thead>
         <tbody>
           {sorted.map((document) => {
-            const ingestedAt = new Date(document.receivedAtUtc);
+            const ingestedAt = new Date(document.uploadedAtUtc);
 
             return (
               <tr
@@ -109,17 +104,18 @@ export function DocumentsTable({ documents }: DocumentsTableProps) {
                   </span>
                 </td>
 
-                <td className="px-3 font-mono text-mono-ui text-fg-muted tabular-nums">
-                  {formatBytes(document.sizeInBytes)}
-                </td>
-
-                <td className="px-3 font-mono text-mono-ui text-fg-muted tabular-nums">
-                  {document.chunkCount}
+                <td className="px-3">
+                  <span
+                    className="block truncate font-mono text-mono-ui text-fg-subtle"
+                    title={document.blobName}
+                  >
+                    {document.blobName}
+                  </span>
                 </td>
 
                 <td className="px-3">
                   <time
-                    dateTime={document.receivedAtUtc}
+                    dateTime={document.uploadedAtUtc}
                     className="font-mono text-mono-ui text-fg-muted"
                     title={ingestedAt.toUTCString()}
                   >

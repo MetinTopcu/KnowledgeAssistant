@@ -238,6 +238,31 @@ internal sealed class FakeAzureSearchService(StageTrace trace) : IAzureSearchSer
 
         return Task.FromResult(Result.Success<IReadOnlyList<ChunkSearchResult>>(Produced));
     }
+
+    public Error? ListError { get; set; }
+
+    public int ReceivedMaxResults { get; private set; } = -1;
+
+    public List<DocumentIndexEntry> Documents { get; } = [];
+
+    public Task<Result<IReadOnlyList<DocumentIndexEntry>>> ListDocumentsAsync(
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        trace.Record("ListDocuments", cancellationToken);
+        ReceivedMaxResults = maxResults;
+
+        if (ListError is not null)
+        {
+            return Task.FromResult(Result.Failure<IReadOnlyList<DocumentIndexEntry>>(ListError));
+        }
+
+        // Honours the limit, as the real adapter's page size does: a handler that
+        // reports "truncated" is only testable against a port that can fill one.
+        IReadOnlyList<DocumentIndexEntry> page = Documents.Take(maxResults).ToArray();
+
+        return Task.FromResult(Result.Success(page));
+    }
 }
 
 /// <summary>

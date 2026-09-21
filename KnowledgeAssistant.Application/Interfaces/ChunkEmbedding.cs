@@ -20,7 +20,7 @@ namespace KnowledgeAssistant.Application.Interfaces;
 /// <b>Why <see cref="ReadOnlyMemory{T}"/> rather than <c>float[]</c>.</b> It is a
 /// BCL type, so no vendor type crosses the boundary, and it is what the
 /// underlying client already hands back — taking it directly avoids copying a
-/// 1536-element array once per chunk for no benefit. Being read-only also states
+/// 3072-element array once per chunk for no benefit. Being read-only also states
 /// that the vector is not the caller's to mutate.
 /// </para>
 /// </remarks>

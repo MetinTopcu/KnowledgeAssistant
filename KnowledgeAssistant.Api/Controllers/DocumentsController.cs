@@ -1,13 +1,14 @@
 using KnowledgeAssistant.Api.Extensions;
 using KnowledgeAssistant.Api.Middleware;
 using KnowledgeAssistant.Application.Commands.Documents.Upload;
+using KnowledgeAssistant.Application.Queries.Documents.List;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace KnowledgeAssistant.Api.Controllers;
 
 /// <summary>
-/// Document ingestion endpoints.
+/// Document ingestion and corpus listing endpoints.
 /// </summary>
 // No class-level [Produces("application/json")]. That attribute is a result
 // filter which CLEARS ObjectResult.ContentTypes and substitutes its own list, so
@@ -36,6 +37,16 @@ public sealed class DocumentsController : ControllerBase
     /// </para>
     /// </remarks>
     private const long MaxRequestBodyBytes = 21L * 1024 * 1024;
+
+    /// <summary>
+    /// How many documents a listing returns when the caller names no limit.
+    /// </summary>
+    /// <remarks>
+    /// A screenful with room to scroll. The ceiling is the validator's, not this
+    /// one: a default is a convenience, a maximum is a resource guard, and
+    /// putting both here would move the guard out of reach of a non-HTTP caller.
+    /// </remarks>
+    private const int DefaultMaxResults = 50;
 
     private readonly ISender _sender;
 
@@ -100,6 +111,44 @@ public sealed class DocumentsController : ControllerBase
             Content: content);
 
         var result = await _sender.Send(command, cancellationToken).ConfigureAwait(false);
+
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Lists the documents that have been ingested.
+    /// </summary>
+    /// <param name="maxResults">The largest number to return, newest first.</param>
+    /// <param name="cancellationToken">Cancelled when the client disconnects.</param>
+    /// <returns>The corpus listing, or a problem response.</returns>
+    /// <remarks>
+    /// <para>
+    /// <c>GET</c>, unlike the question endpoints: this genuinely is a safe,
+    /// repeatable read whose entire input fits in a query string, so the verb
+    /// can mean what it says.
+    /// </para>
+    /// <para>
+    /// The limit is a nullable query parameter resolved to a default here, the
+    /// same division the question endpoints use: the transport supplies a
+    /// convenience, the validator enforces the rule.
+    /// </para>
+    /// <para>
+    /// <b>No cache headers.</b> The corpus changes the moment somebody uploads,
+    /// and a listing served from a proxy after an ingestion is exactly the wrong
+    /// answer to the question this endpoint exists to answer.
+    /// </para>
+    /// </remarks>
+    [HttpGet]
+    [ProducesResponseType(typeof(ListDocumentsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> ListAsync(
+        [FromQuery] int? maxResults,
+        CancellationToken cancellationToken)
+    {
+        var query = new ListDocumentsQuery(maxResults ?? DefaultMaxResults);
+
+        var result = await _sender.Send(query, cancellationToken).ConfigureAwait(false);
 
         return result.ToActionResult();
     }

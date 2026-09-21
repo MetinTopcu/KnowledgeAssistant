@@ -11,9 +11,9 @@ with no edit to the README:
 | `trace.png` | One request in Application Insights or the Aspire dashboard, spanning embedding → search → completion |
 | `health.png` | `/health` with per-dependency status |
 
-Until then the README shows broken-image placeholders. That is deliberate: an
-empty gap says nothing, whereas a visible placeholder is a standing reminder
-that these are missing.
+The README does not reference them until they exist: a broken image in a
+portfolio landing page reads as neglect, and a screenshot of a UI that was never
+run reads as worse. Add the files, then add the table.
 
 **Check every image before committing it.** A screenshot of a real environment
 will show endpoint hostnames, resource names, document ids, and — in a trace

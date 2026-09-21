@@ -19,15 +19,18 @@ namespace KnowledgeAssistant.Application.Commands.Documents.Upload;
 /// caller can act on it — a large PDF that yields two chunks extracted badly.
 /// </para>
 /// <para>
-/// There is still no database row, so <paramref name="DocumentId"/> cannot be
-/// resolved by a subsequent <c>GET</c>. It remains the caller's correlation
-/// handle for logs and support tickets.
+/// The document appears in <c>GET /api/documents</c> as soon as this returns,
+/// but there is still no per-document route: <paramref name="DocumentId"/>
+/// cannot be resolved on its own. It remains the caller's correlation handle
+/// for logs and support tickets, and the key to find the row in the listing.
 /// </para>
 /// <para>
 /// The endpoint therefore still answers <c>200 OK</c> rather than
 /// <c>201 Created</c>: 201 asserts a resource exists at a URL and would oblige a
-/// <c>Location</c> header pointing at something no route serves. That changes in
-/// the slice that adds persistence and a read endpoint.
+/// <c>Location</c> header pointing at something no route serves. The collection
+/// is readable, the individual document is not, and a <c>Location</c> that
+/// pointed at the collection would be a header that answers a different
+/// question. That changes in the slice that adds <c>GET /api/documents/{id}</c>.
 /// </para>
 /// <para>
 /// <b>Why the blob URI is absent.</b> <paramref name="BlobName"/> is returned

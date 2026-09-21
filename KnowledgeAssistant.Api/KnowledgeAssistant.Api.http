@@ -44,6 +44,13 @@ Content-Type: application/pdf
 ------Boundary--
 
 
+### List the corpus
+# Newest first. maxResults is optional (default 50, ceiling 200); "truncated"
+# means the page was filled, so there may be more.
+GET {{host}}/api/documents?maxResults=50
+Accept: application/json
+
+
 ### Ask — the retrieval pipeline
 # One embedding, one search, one completion. Predictable cost and latency.
 # A zero retrievedChunkCount is a success: the corpus had nothing relevant.

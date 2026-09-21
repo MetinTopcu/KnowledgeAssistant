@@ -28,7 +28,6 @@ export const shortcutGroups: readonly ShortcutGroup[] = [
     shortcuts: [
       { keys: ['g', 'a'], description: 'Go to Ask' },
       { keys: ['g', 'g'], description: 'Go to Agent' },
-      { keys: ['g', 'r'], description: 'Go to Runs' },
       { keys: ['g', 'd'], description: 'Go to Documents' },
       { keys: ['g', 'h'], description: 'Go to Health' },
       { keys: ['g', 's'], description: 'Go to Settings' },

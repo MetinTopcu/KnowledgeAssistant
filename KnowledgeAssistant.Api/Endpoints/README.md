@@ -3,12 +3,15 @@
 Minimal API route groups, registered as `IEndpointRouteBuilder` extensions and
 grouped with `MapGroup`.
 
-**A decision you owe the team — `Controllers/` and `Endpoints/` overlap.**
-Both were requested, so both exist, but shipping both as the primary style
-guarantees an inconsistent API where the pattern depends on who wrote it.
-Choose one of these and write it down:
+**This folder is empty, and that is the recorded decision.** `Controllers/` and
+`Endpoints/` overlap, and shipping both as the primary style guarantees an
+inconsistent API where the pattern depends on who wrote it. Option 1 was chosen
+(see ARCHITECTURE.md §6); the operational routes that would have lived here are
+registered in `Api/Observability/HealthEndpointRegistration.cs`, because one
+file beats a folder convention for three routes. The alternatives are kept
+below so the next person can see what was weighed:
 
-1. **Controllers primary (this scaffold's recommendation).** Controllers carry
+1. **Controllers primary — chosen.** Controllers carry
    the versioned business surface; `Endpoints/` holds only lightweight
    operational routes — `/health`, `/ready`, `/version`, diagnostics — where the
    filter pipeline and model binding of MVC are pure overhead. Best fit for an

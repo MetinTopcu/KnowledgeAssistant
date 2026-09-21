@@ -25,9 +25,10 @@ is the design working.
 5. [Managed identity](#5-managed-identity)
 6. [Required RBAC roles](#6-required-rbac-roles)
 7. [Deploy the container](#7-deploy-the-container)
-8. [Configuration reference](#8-configuration-reference)
-9. [Verify the deployment](#9-verify-the-deployment)
-10. [Troubleshooting](#10-troubleshooting)
+8. [GitHub Actions → ACR with OIDC](#8-github-actions--acr-with-oidc)
+9. [Configuration reference](#9-configuration-reference)
+10. [Verify the deployment](#10-verify-the-deployment)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -133,15 +134,8 @@ az search service create \
 authentication; `--sku basic` is the smallest tier supporting vector search at a
 useful scale. The free tier works for a trial but caps index count and size.
 
-Enable a system-assigned identity on the **search service itself** — this is not
-the application's identity, and §6 explains why it needs one:
-
-```bash
-az search service update \
-  --name $SEARCH \
-  --resource-group $RG \
-  --identity-type SystemAssigned
-```
+The search service itself needs no managed identity: the service-side vectorizer
+is disabled, so it never calls AI Foundry (§6).
 
 Configuration:
 
@@ -181,21 +175,31 @@ to debug later.
 
 ### Model deployments
 
+The verified pair is `text-embedding-3-large` (3072-dimensional vectors) and
+`gpt-5-mini`. Reuse existing deployments of them if the account has them —
+`az cognitiveservices account deployment list -n $FOUNDRY -g $RG` — rather than
+creating duplicates.
+
 ```bash
 az cognitiveservices account deployment create \
   --name $FOUNDRY --resource-group $RG \
-  --deployment-name text-embedding-3-small \
-  --model-name text-embedding-3-small \
+  --deployment-name text-embedding-3-large \
+  --model-name text-embedding-3-large \
   --model-version 1 --model-format OpenAI \
-  --sku-capacity 50 --sku-name Standard
+  --sku-capacity 120 --sku-name Standard
 
 az cognitiveservices account deployment create \
   --name $FOUNDRY --resource-group $RG \
-  --deployment-name gpt-4o-mini \
-  --model-name gpt-4o-mini \
-  --model-version 2024-07-18 --model-format OpenAI \
-  --sku-capacity 50 --sku-name Standard
+  --deployment-name gpt-5-mini \
+  --model-name gpt-5-mini \
+  --model-version 2025-08-07 --model-format OpenAI \
+  --sku-capacity 50 --sku-name GlobalStandard
 ```
+
+`gpt-5-mini` is a reasoning model: it accepts only its default temperature, which
+is why `ChatTemperature` and `Agent:Temperature` are unset by default and no
+temperature is sent. The embedding dimension is checked against the model at
+startup; `knowledge-chunks` is created with it.
 
 **Deployment names, not model names.** The application addresses deployments.
 Using a model name where Azure expects a deployment is the single most common
@@ -219,44 +223,54 @@ Configuration:
 
 ```
 Azure:AiFoundry:Endpoint                    https://<account>.services.ai.azure.com/
-Azure:AiFoundry:ChatDeploymentName          gpt-4o-mini
-Azure:AiFoundry:EmbeddingDeploymentName     text-embedding-3-small
-Azure:AiFoundry:EmbeddingModelName          text-embedding-3-small
-Azure:AiFoundry:EmbeddingDimensions         1536
-Azure:AiFoundry:Agent:ProjectEndpoint       (leave empty if the account has one project)
+Azure:AiFoundry:ChatDeploymentName          gpt-5-mini
+Azure:AiFoundry:EmbeddingDeploymentName     text-embedding-3-large
+Azure:AiFoundry:Agent:ProjectEndpoint       https://<account>.services.ai.azure.com/api/projects/<project>
+Azure:AiFoundry:Agent:Version               <pinned version, e.g. 2>
 ```
 
-`Agent:ProjectEndpoint` may be left empty while the account hosts exactly one
-project, because the account endpoint resolves to it. Set it explicitly as soon
-as there is a second, or the agent resolves against whichever one Azure picks.
+`EmbeddingModelName` / `EmbeddingDimensions` default to `text-embedding-3-large`
+/ `3072`; set both only for a different embedding model.
 
-### Pin the agent version before production
+`Agent:ProjectEndpoint` is **required**, even for a single-project account. The
+account endpoint answered 404 to every agent call against a live one-project
+account, so there is no fallback: an empty value, or one without an
+`/api/projects/<name>` path, stops the host at startup.
 
-Left empty, `Azure:AiFoundry:Agent:Version` makes the running process resolve or
-create an agent version on the first question — convenient for a first run, and
-wrong for production, because it requires giving the application **write**
-permission on the project.
+### Pin the agent version
+
+`Azure:AiFoundry:Agent:Version` is **required outside Development**. Only a
+Development host may leave it empty, in which case it provisions (or reuses) a
+version matching its definition on the first question — which needs the
+**write** role `Azure AI Project Manager` on the project, granted to a
+developer, never to the deployed identity.
 
 ```
-1. Run once with Azure AI Project Manager granted.
+1. In Development, ask one agent question.
 2. Read the version from the log:
-     Created Foundry agent 'knowledge-assistant' version 3 (definition a1b2c3…)
-3. Set Azure:AiFoundry:Agent:Version=3
-4. Remove the Azure AI Project Manager assignment.
+     Created Foundry agent 'knowledge-assistant' version 2 (definition 17b3f4…)
+3. Set Azure__AiFoundry__Agent__Version=2 on the deployed app.
 ```
 
-With a version pinned the application lists nothing and creates nothing, and
-`Azure AI User` alone is sufficient. It also puts the agent's instructions and
-tool schema under deployment control rather than leaving them to whatever the
-process decided at boot.
+The deployed app then reads that one version on first use and compares its
+stored definition fingerprint with the one the build computes. A match logs
+`Using pinned Foundry agent ... matches this build`; a mismatch — different
+instructions, tool schema, model deployment, or temperature — fails the agent
+route with `Agent.ProvisioningFailed` and a log naming both fingerprints, rather
+than silently running an agent this code was not written against. The deployed
+identity needs only `Azure AI User`.
 
 ---
 
 ## 5. Managed identity
 
 The identity is what replaces every credential this service does not have.
-`DefaultAzureCredential` resolves to your `az login` on a laptop and to the
-platform-assigned identity in Azure — the same code path in both.
+In Azure the application uses `DefaultAzureCredential`, which resolves to the
+platform-assigned identity. Only in the `Development` environment does it use a
+single developer credential instead: `AzureCliCredential` for `dotnet run`, or
+`ManagedIdentityCredential` against the local `azure-token-proxy` under Docker
+Compose (`Azure:Credential:DevelopmentCredential`). Neither can be selected in a
+deployed environment.
 
 **System-assigned** is the default and the simpler choice: it is created with the
 app, deleted with it, and cannot be attached to anything else.
@@ -297,31 +311,38 @@ PRINCIPAL=$(az containerapp identity show \
 
 ### The application's identity
 
-| Resource | Role | Needed for |
-|---|---|---|
-| Storage account | `Storage Blob Data Contributor` | Upload and re-read documents |
-| AI Search | `Search Index Data Contributor` | Write and query index documents |
-| AI Search | `Search Service Contributor` | Create the two indexes on first use |
-| AI Foundry | `Cognitive Services OpenAI User` | Embeddings and chat completions |
-| AI Foundry project | `Azure AI User` | Run the agent |
-| AI Foundry project | `Azure AI Project Manager` | **Only** while the agent version is unpinned — see §4 |
-| Document Intelligence | `Cognitive Services User` | Only if an endpoint is configured |
+| Resource | Role | Scope | Needed for |
+|---|---|---|---|
+| Storage | `Storage Blob Data Contributor` | The documents **container** | Upload and re-read documents |
+| AI Search | `Search Index Data Contributor` | Search service | Write and query index documents |
+| AI Search | `Search Service Contributor` | Search service | Read, and on first use create, the two indexes |
+| AI Foundry | `Azure AI User` (portal: **Foundry User**) | The **account** | Embeddings, chat, Document Intelligence, and the agent |
+| Container registry | `AcrPull` | The registry | Pull the image with the app's identity |
+
+`Azure AI User` carries the account's data actions (OpenAI inference, Document
+Intelligence, agents), so `Cognitive Services OpenAI User` and
+`Cognitive Services User` would be redundant. It must be on the account, not the
+project: chat, embeddings, and Document Intelligence are account-level
+endpoints. `Azure AI Project Manager` is never granted to the deployed identity —
+the agent version is pinned (§4).
 
 ```bash
 STORAGE_ID=$(az storage account show -n $STORAGE -g $RG --query id -o tsv)
 SEARCH_ID=$(az search service show -n $SEARCH -g $RG --query id -o tsv)
 FOUNDRY_ID=$(az cognitiveservices account show -n $FOUNDRY -g $RG --query id -o tsv)
+ACR_ID=$(az acr show -n $ACR --query id -o tsv)
 
-az role assignment create --assignee $PRINCIPAL \
-  --role "Storage Blob Data Contributor" --scope $STORAGE_ID
-az role assignment create --assignee $PRINCIPAL \
+az role assignment create --assignee-object-id $PRINCIPAL --assignee-principal-type ServicePrincipal \
+  --role "Storage Blob Data Contributor" \
+  --scope "$STORAGE_ID/blobServices/default/containers/$CONTAINER"
+az role assignment create --assignee-object-id $PRINCIPAL --assignee-principal-type ServicePrincipal \
   --role "Search Index Data Contributor" --scope $SEARCH_ID
-az role assignment create --assignee $PRINCIPAL \
+az role assignment create --assignee-object-id $PRINCIPAL --assignee-principal-type ServicePrincipal \
   --role "Search Service Contributor"    --scope $SEARCH_ID
-az role assignment create --assignee $PRINCIPAL \
-  --role "Cognitive Services OpenAI User" --scope $FOUNDRY_ID
-az role assignment create --assignee $PRINCIPAL \
-  --role "Azure AI User"                  --scope $FOUNDRY_ID
+az role assignment create --assignee-object-id $PRINCIPAL --assignee-principal-type ServicePrincipal \
+  --role "Azure AI User"                 --scope $FOUNDRY_ID
+az role assignment create --assignee-object-id $PRINCIPAL --assignee-principal-type ServicePrincipal \
+  --role "AcrPull"                       --scope $ACR_ID
 ```
 
 `Search Service Contributor` is only needed because the application creates its
@@ -329,105 +350,172 @@ indexes on demand. If you provision both indexes out of band, drop it — the
 running service then has no permission to alter the schema it queries, which is
 the better arrangement for production.
 
-### The search service's identity — the step people miss
+### The search service's identity — none required
 
-`Azure:Search:EnableVectorizer` declares integrated vectorization on the chunk
-index, so the search service can embed a query string itself at query time. That
-call is made by the **search service's** identity, not the application's.
-Granting the application `Cognitive Services OpenAI User` does nothing for it.
-
-| Identity | Resource | Role |
-|---|---|---|
-| Search service | AI Foundry | `Cognitive Services OpenAI User` |
-
-```bash
-SEARCH_PRINCIPAL=$(az search service show \
-  -n $SEARCH -g $RG --query identity.principalId -o tsv)
-
-az role assignment create --assignee $SEARCH_PRINCIPAL \
-  --role "Cognitive Services OpenAI User" --scope $FOUNDRY_ID
-```
-
-The index is created successfully without this, because the vectorizer is only
-exercised by queries. So a missing grant surfaces later, as a failing search
-rather than a failing deployment — which is exactly why it is easy to miss.
+`Azure:Search:EnableVectorizer` is `false` and the service-side Azure OpenAI
+vectorizer is not used. The application generates query embeddings itself and
+submits a `VectorizedQuery`, so the search service never calls AI Foundry: it
+needs no managed identity and no `Cognitive Services OpenAI User` assignment.
 
 ### Your own account, for local development
 
-Grant yourself the same roles on the same scopes. `DefaultAzureCredential` uses
-your `az login` locally, so your account needs precisely what the managed
-identity needs:
+Grant yourself the same roles on the same scopes. In `Development` the
+application authenticates as your `az login`, so your account needs precisely
+what the managed identity needs:
 
 ```bash
 ME=$(az ad signed-in-user show --query id -o tsv)
 
-az role assignment create --assignee $ME --role "Storage Blob Data Contributor"  --scope $STORAGE_ID
+az role assignment create --assignee $ME --role "Storage Blob Data Contributor" \
+  --scope "$STORAGE_ID/blobServices/default/containers/$CONTAINER"
 az role assignment create --assignee $ME --role "Search Index Data Contributor"  --scope $SEARCH_ID
 az role assignment create --assignee $ME --role "Search Service Contributor"     --scope $SEARCH_ID
-az role assignment create --assignee $ME --role "Cognitive Services OpenAI User" --scope $FOUNDRY_ID
 az role assignment create --assignee $ME --role "Azure AI User"                  --scope $FOUNDRY_ID
+# Only while provisioning an agent version in Development:
+az role assignment create --assignee $ME --role "Azure AI Project Manager"       --scope $FOUNDRY_ID/projects/$PROJECT
 ```
 
 ---
 
 ## 7. Deploy the container
 
-The published image is multi-arch (`linux/amd64`, `linux/arm64`) and runs as a
-non-root user on port 8080.
+The image runs as a non-root user on port 8080 and contains no Azure CLI, no
+SDK, and no source — only the published application on the ASP.NET runtime.
+
+CI builds and publishes it on every push to `master`, to the existing Azure
+Container Registry, tagged with the commit SHA (§8):
 
 ```
-ghcr.io/metintopcu/knowledgeassistant:latest
+<registry>.azurecr.io/knowledge-assistant-api:<commit-sha>
 ```
 
-Prefer a version tag over `latest` in production: `latest` moves, and a rollback
-you cannot name is not a rollback.
+Deploy by SHA tag or by digest, never by a moving tag: a rollback you cannot
+name is not a rollback. ACR is the only registry this repository publishes to.
 
 ### Azure Container Apps
 
+This is the path that was deployed and verified end to end (upload, RAG, agent)
+with the app's managed identity. It was driven through ARM (`az rest`) because
+the `containerapp` CLI extension failed to install on the machine used; the
+`az containerapp` commands are equivalent but were not the ones exercised.
+
+**1. Environment** — Consumption only, no Log Analytics (no fixed cost; the
+console log stream still works). Register the provider once per subscription.
+
 ```bash
-az containerapp create \
-  --name $APP \
-  --resource-group $RG \
-  --environment cae-knowledge-assistant \
-  --image ghcr.io/metintopcu/knowledgeassistant:latest \
-  --target-port 8080 \
-  --ingress external \
-  --system-assigned \
-  --min-replicas 1 \
-  --env-vars \
-    Azure__Storage__ServiceUri="https://$STORAGE.blob.core.windows.net/" \
-    Azure__Search__Endpoint="https://$SEARCH.search.windows.net/" \
-    Azure__AiFoundry__Endpoint="https://$FOUNDRY.services.ai.azure.com/" \
-    Azure__AiFoundry__ChatDeploymentName="gpt-4o-mini" \
-    Azure__AiFoundry__EmbeddingDeploymentName="text-embedding-3-small"
+az provider register -n Microsoft.App --wait
+ENV_ID=/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/managedEnvironments/cae-knowledge-assistant
+az rest --method put --url "https://management.azure.com$ENV_ID?api-version=2024-03-01" \
+  --body '{"location":"'$LOCATION'","properties":{"zoneRedundant":false}}'
 ```
 
-Then configure the probes. They are deliberately different endpoints, and using
-one for both is a real availability bug:
+**2. Image** — build with the repository `Dockerfile` and push to an existing
+registry. The app pulls it with its own identity (`AcrPull`), so the registry
+needs no admin user and the app holds no registry password.
+
+```bash
+docker build -t $ACR.azurecr.io/knowledge-assistant-api:$TAG .
+az acr login -n $ACR
+docker push $ACR.azurecr.io/knowledge-assistant-api:$TAG
+```
+
+**3. App, in two steps.** A system-assigned identity does not exist until the
+app does, and the app cannot pull a private image until that identity holds
+`AcrPull`. So create it first with a public placeholder image
+(`mcr.microsoft.com/k8se/quickstart:latest`) and `"identity":{"type":"SystemAssigned"}`,
+read `identity.principalId`, assign the §6 roles, then PUT the real definition:
+
+```jsonc
+{
+  "location": "<location>",
+  "identity": { "type": "SystemAssigned" },
+  "properties": {
+    "managedEnvironmentId": "<ENV_ID>",
+    "configuration": {
+      "activeRevisionsMode": "Single",
+      "ingress": {
+        "external": true, "targetPort": 8080, "allowInsecure": false,
+        // The API has no user authentication (docs/DESIGN.md): restrict who can reach it.
+        "ipSecurityRestrictions": [ { "name": "allow-dev", "ipAddressRange": "<your-ip>/32", "action": "Allow" } ]
+      },
+      "registries": [ { "server": "<acr>.azurecr.io", "identity": "system" } ],
+      // Ingestion-scoped, but not for source control: a Container Apps secret.
+      "secrets": [ { "name": "appinsights-connection-string", "value": "<connection string>" } ]
+    },
+    "template": {
+      "containers": [ {
+        "name": "api",
+        "image": "<acr>.azurecr.io/knowledge-assistant-api:<tag>",
+        "resources": { "cpu": 0.5, "memory": "1Gi" },
+        "env": [
+          { "name": "Azure__Storage__ServiceUri", "value": "https://<storage>.blob.core.windows.net/" },
+          { "name": "Azure__Storage__DocumentsContainer", "value": "<container>" },
+          { "name": "Azure__Search__Endpoint", "value": "https://<search>.search.windows.net/" },
+          { "name": "Azure__DocumentIntelligence__Endpoint", "value": "https://<foundry>.cognitiveservices.azure.com/" },
+          { "name": "Azure__AiFoundry__Endpoint", "value": "https://<foundry>.services.ai.azure.com/" },
+          { "name": "Azure__AiFoundry__ChatDeploymentName", "value": "gpt-5-mini" },
+          { "name": "Azure__AiFoundry__EmbeddingDeploymentName", "value": "text-embedding-3-large" },
+          { "name": "Azure__AiFoundry__Agent__ProjectEndpoint", "value": "https://<foundry>.services.ai.azure.com/api/projects/<project>" },
+          { "name": "Azure__AiFoundry__Agent__Version", "value": "<pinned version>" },
+          { "name": "Observability__AzureMonitor__ConnectionString", "secretRef": "appinsights-connection-string" }
+        ],
+        "probes": [
+          { "type": "Startup",   "httpGet": { "path": "/health/live",  "port": 8080 }, "periodSeconds": 5,  "timeoutSeconds": 3, "failureThreshold": 12 },
+          { "type": "Liveness",  "httpGet": { "path": "/health/live",  "port": 8080 }, "periodSeconds": 30, "timeoutSeconds": 3, "failureThreshold": 3 },
+          { "type": "Readiness", "httpGet": { "path": "/health/ready", "port": 8080 }, "periodSeconds": 15, "timeoutSeconds": 6, "failureThreshold": 3 }
+        ]
+      } ],
+      "scale": { "minReplicas": 0, "maxReplicas": 1 }
+    }
+  }
+}
+```
+
+```bash
+APP_ID=/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/containerApps/$APP
+az rest --method put --url "https://management.azure.com$APP_ID?api-version=2024-03-01" \
+  --headers "Content-Type=application/json" --body @containerapp.json
+```
+
+Keep the filled-in body out of the repository — it carries the connection
+string — and delete it after the PUT. `ASPNETCORE_ENVIRONMENT` is not set: the
+image defaults to `Production`, which is what selects `DefaultAzureCredential`
+and requires the pinned agent version.
+
+The probes are deliberately different endpoints, and using one for both is a
+real availability bug:
 
 | Probe | Path | Why |
 |---|---|---|
 | Liveness | `/health/live` | Never contacts a dependency. It decides whether to **restart**, and restarting cannot fix someone else's outage — pointing it at `/health/ready` turns a dependency incident into a cluster-wide crash loop |
-| Readiness | `/health/ready` | Contacts dependencies. It decides whether to **route traffic**, which is exactly the right response to an unreachable index |
+| Readiness | `/health/ready` | Contacts dependencies. It decides whether to **route traffic**, which is exactly the right response to an unreachable index. Its 6 s timeout sits just above the application's own 5 s dependency budget, so the platform receives the app's verdict instead of cutting it off |
 | Startup | `/health/live` | Gives the host time to bind before liveness begins |
 
-`min-replicas 1` because scale-to-zero costs a cold start on the first question,
-and the agent path is already the slower of the two.
+**Scale.** `minReplicas 0` keeps an idle app free on a credit-limited
+subscription, at the cost of a cold start on the first request after idle. Use
+`minReplicas 1` where that latency matters more than the idle charge.
+
+**Logs without Log Analytics.** The console stream is reachable through ARM:
+`POST $APP_ID/getAuthtoken`, then `GET` the app's `eventStreamEndpoint` host at
+`/subscriptions/.../containerApps/$APP/revisions/<rev>/replicas/<replica>/containers/api/logstream?tailLines=100`
+with that token.
 
 ### Azure App Service
 
 ```bash
 az webapp create \
   --name $APP --resource-group $RG --plan asp-knowledge-assistant \
-  --deployment-container-image-name ghcr.io/metintopcu/knowledgeassistant:latest
+  --deployment-container-image-name $ACR.azurecr.io/knowledge-assistant-api:$TAG
 
 az webapp config appsettings set --name $APP --resource-group $RG --settings \
   WEBSITES_PORT=8080 \
   Azure__Storage__ServiceUri="https://$STORAGE.blob.core.windows.net/" \
   Azure__Search__Endpoint="https://$SEARCH.search.windows.net/" \
   Azure__AiFoundry__Endpoint="https://$FOUNDRY.services.ai.azure.com/" \
-  Azure__AiFoundry__ChatDeploymentName="gpt-4o-mini" \
-  Azure__AiFoundry__EmbeddingDeploymentName="text-embedding-3-small"
+  Azure__AiFoundry__ChatDeploymentName="gpt-5-mini" \
+  Azure__AiFoundry__EmbeddingDeploymentName="text-embedding-3-large" \
+  Azure__AiFoundry__Agent__ProjectEndpoint="https://$FOUNDRY.services.ai.azure.com/api/projects/$PROJECT" \
+  Azure__AiFoundry__Agent__Version="$AGENT_VERSION"
 
 az webapp identity assign --name $APP --resource-group $RG
 ```
@@ -437,16 +525,120 @@ the container binds 8080 because a non-root user cannot bind below 1024.
 
 ### Publishing from CI
 
-`.github/workflows/publish.yml` pushes to GHCR using the automatic
-`GITHUB_TOKEN`, so there is no registry secret. To push to Azure Container
-Registry instead, replace the login step with `azure/login@v2` using **OIDC
-federated credentials** and grant `id-token: write`. Do not add a registry
-password as a repository secret: federated credentials exist precisely so a
-long-lived one does not have to.
+`.github/workflows/acr-publish.yml` builds and pushes this image to the registry
+on every push to `master`, after `ci.yml` (which it calls) passes, authenticating
+with OIDC. §8 sets that up.
+
+It stops there. **Nothing in CI deploys.** The Container App above keeps serving
+the image it was last given until someone changes the `image` in its template by
+hand.
 
 ---
 
-## 8. Configuration reference
+## 8. GitHub Actions → ACR with OIDC
+
+One workflow ([`acr-publish.yml`](.github/workflows/acr-publish.yml)) needs one
+capability: push an image to one registry. This section creates an identity that
+can do exactly that and nothing else, with no password in existence.
+
+### Why federation rather than a secret
+
+A service principal password in a repository secret is a long-lived credential
+that works from anywhere, for anyone who can read it, until somebody remembers
+to rotate it. A federated credential is a statement of trust instead: *tokens
+issued by GitHub, for this repository, on this branch, may act as this
+identity*. The runner presents a token minted for that single workflow run and
+Entra ID exchanges it for an Azure token. Nothing is stored, so nothing can
+leak, and a fork cannot use it — the subject would not match.
+
+This is the same principle the application itself follows with managed identity.
+
+### Create the identity
+
+```bash
+APP_NAME=github-knowledge-assistant-acr
+REPO=<owner>/<repository>          # e.g. MetinTopcu/KnowledgeAssistant
+BRANCH=master
+ACR=<registry-name>
+RG=<registry-resource-group>
+
+# 1. An application and its service principal. No credential is created here —
+#    `az ad app credential reset` is exactly what we are avoiding.
+APP_ID=$(az ad app create --display-name $APP_NAME --query appId -o tsv)
+az ad sp create --id $APP_ID
+
+# 2. The federated credential: who may act as this identity, and from where.
+#    The subject must match GitHub's token exactly. For a branch push it is
+#    `repo:<owner>/<repo>:ref:refs/heads/<branch>` — a tag, a pull request, or
+#    an environment each have a different subject and need their own credential.
+az ad app federated-credential create --id $APP_ID --parameters "{
+  \"name\": \"github-$BRANCH\",
+  \"issuer\": \"https://token.actions.githubusercontent.com\",
+  \"subject\": \"repo:$REPO:ref:refs/heads/$BRANCH\",
+  \"audiences\": [\"api://AzureADTokenExchange\"]
+}"
+
+# 3. One role, one scope: push to this registry. AcrPush includes pull, so no
+#    second assignment is needed. Do NOT use Contributor, and do NOT assign at
+#    resource-group or subscription scope — the identity would then be able to
+#    change the Container App, which is precisely what this pipeline must not do.
+ACR_ID=$(az acr show -n $ACR -g $RG --query id -o tsv)
+SP_OBJECT_ID=$(az ad sp show --id $APP_ID --query id -o tsv)
+az role assignment create \
+  --assignee-object-id $SP_OBJECT_ID --assignee-principal-type ServicePrincipal \
+  --role "AcrPush" --scope $ACR_ID
+
+echo "AZURE_CLIENT_ID       $APP_ID"
+echo "AZURE_TENANT_ID       $(az account show --query tenantId -o tsv)"
+echo "AZURE_SUBSCRIPTION_ID $(az account show --query id -o tsv)"
+```
+
+### Tell GitHub
+
+Add the three values as repository secrets — *Settings → Secrets and variables →
+Actions → New repository secret*:
+
+| Secret | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | The application's client id |
+| `AZURE_TENANT_ID` | The tenant id |
+| `AZURE_SUBSCRIPTION_ID` | The subscription id |
+
+None of the three is a credential — they identify, they do not authorise. They
+are secrets rather than variables only so a public build log does not carry
+them.
+
+**Do not add a registry username or password, and do not enable the registry's
+admin user.** `az acr login` in the workflow exchanges the Entra token for a
+short-lived registry token; an admin password would be a second, permanent way
+in that nothing needs.
+
+### What this identity cannot do
+
+| | |
+|---|---|
+| Deploy or restart the Container App | No. It has no role on `Microsoft.App/*` |
+| Change ingress, scale, or configuration | No |
+| Read or write Blob Storage, Search, or Foundry | No — no data-plane role anywhere |
+| Create or delete Azure resources | No |
+| Delete images or the registry | No. `AcrPush` grants pull and push, not `AcrDelete` and not registry management |
+| Act from another branch, a tag, or a fork | No. The token's subject would not match the federated credential |
+
+### Verify it
+
+Push to `master`, or run the workflow manually from `master`, and check that the
+*Sign in to Azure with OIDC* step succeeds. Then:
+
+```bash
+az acr repository show-tags -n $ACR --repository knowledge-assistant-api -o table
+```
+
+The new commit SHA should be listed. Nothing about the running Container App
+should have changed.
+
+---
+
+## 9. Configuration reference
 
 Configuration comes from environment variables in Azure. Nesting uses double
 underscores — `Azure__Search__Endpoint` is `Azure:Search:Endpoint`. A single
@@ -462,9 +654,11 @@ underscore does **not** nest, and a mistyped key binds nothing.
 | `Azure__AiFoundry__Endpoint` | Yes | |
 | `Azure__AiFoundry__ChatDeploymentName` | Yes | Deployment, not model |
 | `Azure__AiFoundry__EmbeddingDeploymentName` | Yes | Deployment, not model |
-| `Azure__AiFoundry__EmbeddingDimensions` | No | Must match the model and the index |
-| `Azure__AiFoundry__Agent__ProjectEndpoint` | No | Required once the account has >1 project |
-| `Azure__AiFoundry__Agent__Version` | No | **Set in production** — see §4 |
+| `Azure__AiFoundry__EmbeddingModelName` | No | Defaults to `text-embedding-3-large` |
+| `Azure__AiFoundry__EmbeddingDimensions` | No | Defaults to `3072`; checked against a known model at startup; fixes the chunk index schema |
+| `Azure__AiFoundry__ChatTemperature` | No | Unset sends none (required for reasoning models) |
+| `Azure__AiFoundry__Agent__ProjectEndpoint` | **Yes** | `https://<account>.services.ai.azure.com/api/projects/<project>` — the account endpoint is rejected |
+| `Azure__AiFoundry__Agent__Version` | **Yes** (outside Development) | Pinned and verified against the build — see §4 |
 | `Azure__DocumentIntelligence__Endpoint` | No | Empty selects local PdfPig |
 | `Azure__Credential__ManagedIdentityClientId` | No | User-assigned identity only |
 | `Observability__AzureMonitor__ConnectionString` | No | Ingestion-scoped, but still not for source control |
@@ -477,7 +671,7 @@ visibly instead of on the first request that reaches storage.
 
 ---
 
-## 9. Verify the deployment
+## 10. Verify the deployment
 
 ```bash
 URL=$(az containerapp show -n $APP -g $RG \
@@ -504,16 +698,18 @@ the endpoint, so turn it off again.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | `403` from storage, search, or Foundry | A data-plane role is missing or has not propagated. `Owner` is not sufficient — see §6 |
-| Searches return nothing after a successful ingest | The **search service's** identity is missing `Cognitive Services OpenAI User`. §6 |
 | `404` from AI Foundry with correct-looking config | A model name was used where a deployment name is required. §4 |
 | `429` under load | Deployment capacity. The retry pipeline handles bursts; sustained throttling is a quota increase |
 | Startup fails naming a setting | `ValidateOnStart` working as intended. The message names the missing key |
-| `CredentialUnavailableException` locally | Not logged in. Run `az login` |
+| `CredentialUnavailableException` locally | Not logged in, or `az` not on `PATH`. `Development` uses the Azure CLI only. Run `az login` |
+| `Agent.ProvisioningFailed`, log says `does not exist in the project` | The pinned `Agent:Version` is not in that project. §4 |
+| `Agent.ProvisioningFailed`, log says `was created from definition ... but this build defines ...` | The pinned version was provisioned from different instructions, tool schema, model deployment, or temperature. Provision in Development and pin the new version. §4 |
+| `400 unsupported_value` naming `temperature` | A temperature is set for a reasoning model. Unset `ChatTemperature` / `Agent:Temperature` |
 | `CredentialUnavailableException` in Azure | No identity assigned, or `ManagedIdentityClientId` set to an empty string rather than left unset. §5 |
 | Agent fails with `Agent.ProvisioningFailed` | Missing `Azure AI Project Manager` while the version is unpinned, or a pinned version that no longer exists. §4 |
 | `WRN Failed to determine the https port for redirect` | Expected and harmless behind TLS-terminating ingress. Container Apps and App Service terminate TLS at the edge and forward HTTP, so `UseHttpsRedirection` finds no port to redirect to and passes the request through. Requests are still HTTPS end to end from the client |

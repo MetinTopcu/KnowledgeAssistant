@@ -99,6 +99,11 @@ internal sealed class KnowledgeAssistantApiFactory : WebApplicationFactory<Progr
         ["Azure:AiFoundry:Endpoint"] = "https://fake.services.ai.azure.com/",
         ["Azure:AiFoundry:ChatDeploymentName"] = "gpt-4o-mini",
         ["Azure:AiFoundry:EmbeddingDeploymentName"] = "text-embedding-3-small",
+
+        // Both required: the project endpoint always, and a pinned version
+        // because this host runs as "Testing", not Development.
+        ["Azure:AiFoundry:Agent:ProjectEndpoint"] = "https://fake.services.ai.azure.com/api/projects/fake-project",
+        ["Azure:AiFoundry:Agent:Version"] = "1",
         ["Chunking:MaxChunkSize"] = "800",
         ["Chunking:OverlapSize"] = "200",
     };

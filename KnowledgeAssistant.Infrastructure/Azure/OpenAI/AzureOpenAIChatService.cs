@@ -79,10 +79,10 @@ internal sealed partial class AzureOpenAIChatService : IChatService
         {
             MaxOutputTokenCount = _options.ChatMaxOutputTokens,
 
-            // Zero by default. A grounded answer should be reproducible: the same
-            // question over the same corpus ought to give the same answer, and
-            // sampling variation in a factual lookup is noise, not creativity.
-            Temperature = (float)_options.ChatTemperature,
+            // Null leaves the parameter out of the request, so the model's own
+            // default applies. Reasoning models reject any explicit value but
+            // that default; see AzureOpenAIOptions.ChatTemperature.
+            Temperature = (float?)_options.ChatTemperature,
         };
 
         ChatCompletion completion;

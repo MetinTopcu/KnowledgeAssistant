@@ -268,6 +268,37 @@ internal sealed class FakeSearchIndex(FakeVectorIndex vectorIndex) : IAzureSearc
 
         return Task.FromResult(Result.Success(results));
     }
+
+    public Error? ListError { get; set; }
+
+    public Task<Result<IReadOnlyList<DocumentIndexEntry>>> ListDocumentsAsync(
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        if (ListError is not null)
+        {
+            return Task.FromResult(Result.Failure<IReadOnlyList<DocumentIndexEntry>>(ListError));
+        }
+
+        // Served from what ingestion actually indexed, and newest first, as the
+        // real adapter orders it — so "upload two documents, then list them"
+        // exercises the same connection between the two endpoints that a user
+        // sees, rather than a canned page unrelated to what was uploaded.
+        IReadOnlyList<DocumentIndexEntry> page =
+        [
+            .. Documents
+                .OrderByDescending(document => document.UploadedAt)
+                .Take(maxResults)
+                .Select(document => new DocumentIndexEntry(
+                    document.DocumentId,
+                    document.OriginalFileName,
+                    document.BlobName,
+                    document.BlobUri,
+                    document.UploadedAt)),
+        ];
+
+        return Task.FromResult(Result.Success(page));
+    }
 }
 
 /// <summary>

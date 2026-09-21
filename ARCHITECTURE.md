@@ -5,9 +5,12 @@ This document defines the structure and the rules that keep it intact. Each
 folder additionally carries its own `README.md` explaining that folder's purpose
 in detail.
 
-**Status: architecture only.** No business logic, no implementations, no
-placeholder classes. Every folder is empty by design and documented rather than
-filled with stubs that would have to be deleted later.
+**Status: implemented.** This began as an architecture-only scaffold and the
+rules below survived the implementation — which was the point of writing them
+down first. Ingestion, retrieval, and the agent are built and running on Azure;
+the layer rules are enforced by the architecture test suite (§7). The few
+folders that are still empty are empty on purpose and say so in their own
+`README.md`, rather than holding stubs that would have to be deleted later.
 
 ---
 
@@ -133,7 +136,7 @@ with an index nobody dares delete.
 
 ---
 
-## 5. Decisions made in this scaffold
+## 5. Decisions made, and why
 
 **MediatR is pinned to 12.4.1, the last Apache-2.0 release.** Version 13 and
 later ship a proprietary licence and require paid commercial licensing above a
@@ -303,37 +306,44 @@ production arrangement.
 
 ---
 
-## 6. Open decisions for you
+## 6. Open decisions
 
-**`Api/Controllers` vs `Api/Endpoints` overlap.** Both were requested and both
-exist, but shipping both as the primary style produces an API whose shape depends
-on its author. The recommendation: controllers carry the versioned business
-surface; `Endpoints/` holds only operational routes (`/health`, `/ready`,
-`/version`). Decide and record it.
+**`Api/Controllers` vs `Api/Endpoints`.** Decided in practice, and recorded
+here: controllers carry the business surface, and `Endpoints/` stays empty. The
+operational routes it was meant to hold live in `Api/Observability`
+(`HealthEndpointRegistration`), registered directly on the route builder — one
+file rather than a folder convention for three routes. The folder keeps its
+README because the reasoning is worth reading before anyone adds a fourth style.
 
-**No ORM is wired.** Your stack did not name one, and `Persistence/` should not
-be committed to EF Core before the write model exists.
+**No ORM is wired, and `Persistence/` is still empty.** Nothing in this service
+owns durable write state: a document's bytes live in Blob Storage and its
+metadata in a rebuildable Search projection. Adding EF Core before there is a
+write model would be an abstraction in search of a purpose. The folder's README
+says what would belong there.
 
-**No test project yet.** When you add one, add an architecture fitness test
-(NetArchTest or ArchUnitNET) that fails the build when a rule here is broken:
-
-- Domain has no dependency on Application, Infrastructure, or any third party
-- Application has no dependency on Infrastructure or `Azure.*`
-- Nothing in `Api/` outside `Extensions/` references an Infrastructure type
-- Every `ICommand`/`IQuery` has a handler; every request type has a validator
-
-Documented rules erode. Executable rules do not.
+**No user authentication.** `DefaultAzureCredential` authenticates this service
+*to Azure*; nothing authenticates a *user to this service*. The deployed
+instance is fenced by an ingress IP restriction instead, which is a fence and
+not an identity. The intended answer is Entra ID at the platform edge plus a
+validated bearer token, which preserves the property that no secret exists in
+the application.
 
 ---
 
-## 7. Next steps, in order
+## 7. What enforces the rules
 
-1. Define Domain primitives in `Domain/Common`, then the first aggregate.
-2. Define the CQRS contracts in `Application/Abstractions`.
-3. Declare the first outbound ports in `Application/Interfaces`.
-4. Build the pipeline in `Application/Behaviors` (logging + validation first).
-5. Implement `AddInfrastructure` with options binding and `ValidateOnStart`.
-6. Compose `Program.cs` from `Api/Extensions`, wire Serilog and the global
-   exception handler.
-7. Add the test project and the fitness tests above **before** the codebase is
-   large enough for the rules to have already been broken.
+The fitness tests this document once asked for exist, in
+`tests/KnowledgeAssistant.Tests.Architecture`. They fail the build when:
+
+- Domain depends on Application, Infrastructure, or any third party
+- Application depends on Infrastructure or on any `Azure.*` package
+- Anything in `Api/` outside `Extensions/` references an Infrastructure type
+- A request type has no handler, or a command has no validator
+
+Documented rules erode. Executable rules do not — which is why the list above is
+short: every line of it is a test, not a hope.
+
+The rest of the suite is ordinary: unit tests for handlers, adapters, and pure
+logic, and integration tests that host the real API in memory with the Azure
+ports substituted, so they need no credential, no endpoint, and no network. CI
+runs all three on every push and pull request, in Release.

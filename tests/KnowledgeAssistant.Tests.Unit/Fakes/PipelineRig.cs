@@ -1,6 +1,7 @@
 using KnowledgeAssistant.Application.Commands.Documents.Upload;
 using KnowledgeAssistant.Application.Queries.Documents.Ask;
 using KnowledgeAssistant.Application.Queries.Documents.AskAgent;
+using KnowledgeAssistant.Application.Queries.Documents.List;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace KnowledgeAssistant.Tests.Unit.Fakes;
@@ -102,4 +103,16 @@ internal sealed class PipelineRig
             Agent,
             TimeProvider.System,
             NullLogger<AskAgentQueryHandler>.Instance);
+
+    /// <summary>Builds the corpus listing handler with the real validator.</summary>
+    /// <remarks>
+    /// One port, and deliberately only one: listing reads the document index and
+    /// nothing else, so a rig that handed it embedding or chat would invite a
+    /// test to assert against a dependency this slice does not have.
+    /// </remarks>
+    public ListDocumentsQueryHandler CreateListDocumentsHandler() =>
+        new(
+            new ListDocumentsQueryValidator(),
+            Search,
+            NullLogger<ListDocumentsQueryHandler>.Instance);
 }

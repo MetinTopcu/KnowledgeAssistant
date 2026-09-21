@@ -26,16 +26,16 @@ public sealed class AzureOpenAIEmbeddingServiceTests
         int retries = 4,
         double baseDelay = 0.05,
         double maxDelay = 30) => new()
-    {
-        Endpoint = "https://fake.services.ai.azure.com/",
-        EmbeddingDeploymentName = "text-embedding-3-small",
-        ChatDeploymentName = "gpt-4o-mini",
-        EmbeddingDimensions = dimensions,
-        EmbeddingBatchSize = batch,
-        MaxRetryAttempts = retries,
-        RetryBaseDelaySeconds = baseDelay,
-        RetryMaxDelaySeconds = maxDelay,
-    };
+        {
+            Endpoint = "https://fake.services.ai.azure.com/",
+            EmbeddingDeploymentName = "text-embedding-3-small",
+            ChatDeploymentName = "gpt-4o-mini",
+            EmbeddingDimensions = dimensions,
+            EmbeddingBatchSize = batch,
+            MaxRetryAttempts = retries,
+            RetryBaseDelaySeconds = baseDelay,
+            RetryMaxDelaySeconds = maxDelay,
+        };
 
     private static IEmbeddingService Create(FakeEmbeddingClient client, AzureOpenAIOptions options) =>
         new AzureOpenAIEmbeddingService(

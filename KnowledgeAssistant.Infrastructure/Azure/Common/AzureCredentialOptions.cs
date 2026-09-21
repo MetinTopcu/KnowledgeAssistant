@@ -44,4 +44,29 @@ public sealed class AzureCredentialOptions
     /// than an ambiguity, which is an expensive thing to debug.
     /// </remarks>
     public string ManagedIdentityClientId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Which single credential the Development environment uses. Ignored in
+    /// every other environment, which always uses <c>DefaultAzureCredential</c>.
+    /// </summary>
+    /// <remarks>
+    /// <c>AzureCli</c> for a host-run process; <c>ManagedIdentity</c> for the
+    /// Docker Compose stack, whose container has no <c>az</c> and receives tokens
+    /// from a local stand-in for the platform identity endpoint. Neither is a
+    /// secret, and neither can be selected in production by accident.
+    /// </remarks>
+    public DevelopmentCredential DevelopmentCredential { get; init; } = DevelopmentCredential.AzureCli;
+}
+
+/// <summary>The credential a Development host authenticates with.</summary>
+public enum DevelopmentCredential
+{
+    /// <summary>The Azure CLI login on the machine running the process.</summary>
+    AzureCli,
+
+    /// <summary>
+    /// The managed identity protocol, answered locally by a development token
+    /// endpoint (<c>IDENTITY_ENDPOINT</c> / <c>IDENTITY_HEADER</c>).
+    /// </summary>
+    ManagedIdentity,
 }

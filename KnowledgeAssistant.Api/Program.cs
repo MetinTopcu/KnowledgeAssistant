@@ -32,7 +32,7 @@ builder.Services.AddSerilog(
 builder.AddObservability();
 
 builder.Services.AddApplication();
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddInfrastructureHealthChecks(builder.Configuration);
 builder.Services.AddApiServices();
 builder.Services.AddHealthEndpoints();

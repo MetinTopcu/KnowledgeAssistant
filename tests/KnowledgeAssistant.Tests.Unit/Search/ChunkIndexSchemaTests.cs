@@ -27,16 +27,16 @@ public sealed class ChunkIndexSchemaTests
         int hnswM = 4,
         int efConstruction = 400,
         int efSearch = 500) => new()
-    {
-        Endpoint = "https://fake.search.windows.net/",
-        IndexName = "knowledge-index",
-        ChunkIndexName = "knowledge-chunks",
-        IndexingBatchSize = 100,
-        HnswM = hnswM,
-        HnswEfConstruction = efConstruction,
-        HnswEfSearch = efSearch,
-        EnableVectorizer = enableVectorizer,
-    };
+        {
+            Endpoint = "https://fake.search.windows.net/",
+            IndexName = "knowledge-index",
+            ChunkIndexName = "knowledge-chunks",
+            IndexingBatchSize = 100,
+            HnswM = hnswM,
+            HnswEfConstruction = efConstruction,
+            HnswEfSearch = efSearch,
+            EnableVectorizer = enableVectorizer,
+        };
 
     private static AzureOpenAIOptions OpenAIOptions(int dimensions = 1536) => new()
     {
@@ -110,6 +110,57 @@ public sealed class ChunkIndexSchemaTests
         uploadedAt.Type.Should().Be(SearchFieldDataType.DateTimeOffset);
         uploadedAt.IsFilterable.Should().BeTrue();
         uploadedAt.IsSortable.Should().BeTrue();
+    }
+
+    // A null attribute is omitted from the request and the service defaults it
+    // to true, so "not set" silently means "on". Every non-vector field must
+    // therefore say false where it means false.
+    [Theory]
+    [InlineData("ChunkId")]
+    [InlineData("DocumentId")]
+    [InlineData("ChunkOrder")]
+    [InlineData("ChunkText")]
+    [InlineData("BlobUri")]
+    [InlineData("UploadedAt")]
+    public void Build_SetsFilterableSortableAndFacetableExplicitly(string name)
+    {
+        SearchField field = Field(Build(), name);
+
+        field.IsFilterable.Should().NotBeNull();
+        field.IsSortable.Should().NotBeNull();
+        field.IsFacetable.Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData("ChunkId")]
+    [InlineData("DocumentId")]
+    [InlineData("ChunkText")]
+    [InlineData("BlobUri")]
+    public void Build_SetsSearchableExplicitlyOnStrings(string name)
+    {
+        Field(Build(), name).IsSearchable.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Build_MakesChunkTextSearchableOnly()
+    {
+        SearchField chunkText = Field(Build(), "ChunkText");
+
+        chunkText.IsFilterable.Should().BeFalse();
+        chunkText.IsSortable.Should().BeFalse();
+        chunkText.IsFacetable.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Build_MakesBlobUriAPlainRetrievablePointer()
+    {
+        SearchField blobUri = Field(Build(), "BlobUri");
+
+        blobUri.IsSearchable.Should().BeFalse();
+        blobUri.IsFilterable.Should().BeFalse();
+        blobUri.IsSortable.Should().BeFalse();
+        blobUri.IsFacetable.Should().BeFalse();
+        blobUri.IsHidden.Should().NotBe(true, "a citation needs the source pointer back");
     }
 
     [Fact]

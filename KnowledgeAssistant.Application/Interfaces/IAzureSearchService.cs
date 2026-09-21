@@ -85,4 +85,37 @@ public interface IAzureSearchService
         ReadOnlyMemory<float> queryVector,
         int topK,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lists the indexed documents, newest upload first.
+    /// </summary>
+    /// <param name="maxResults">The maximum number of documents to return.</param>
+    /// <param name="cancellationToken">Cancelled when the caller disconnects.</param>
+    /// <returns>
+    /// The documents in descending upload order — possibly empty — or the failure
+    /// that prevented the listing.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>An empty list is a success, and so is a missing index.</b> The index is
+    /// created by the first ingestion, so its absence means nothing has been
+    /// uploaded yet. That is a fact about an empty system, not a fault, and a
+    /// caller asking "what is in the corpus?" has the same sensible response to
+    /// both — which is why the two are not distinguished here.
+    /// </para>
+    /// <para>
+    /// <b>One page, no continuation token.</b> A cursor is a contract about
+    /// ordering stability under concurrent writes, and this index has no such
+    /// guarantee to offer. <paramref name="maxResults"/> bounds the response
+    /// instead; when a corpus grows past what one page can usefully show, paging
+    /// is a decision to take deliberately rather than inherit.
+    /// </para>
+    /// <para>
+    /// <b>Newest first</b>, because a corpus browser is almost always asking what
+    /// arrived recently. Callers that want another order can sort what they get.
+    /// </para>
+    /// </remarks>
+    Task<Result<IReadOnlyList<DocumentIndexEntry>>> ListDocumentsAsync(
+        int maxResults,
+        CancellationToken cancellationToken);
 }

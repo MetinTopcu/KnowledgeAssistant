@@ -1,7 +1,13 @@
 # ═══════════════════════════════════════════════════════════════════════════
-#  CI — build and test on every push and pull request.
+#  CI — build and test every pull request, and every push to master.
 #
-#  This is the gate. It runs the same three suites a developer runs locally
+#  This is the gate, and the only place the validation steps are written down.
+#  Pull requests run it directly. Pushes to master run it through
+#  acr-publish.yml, which calls this workflow and publishes an image only if it
+#  passes — so a master commit is validated exactly once, not once here and
+#  again there.
+#
+#  It runs the same three suites a developer runs locally
 #  (unit, integration, architecture) and it runs them in Release, because
 #  Release is what ships and because analyzer behaviour differs by
 #  configuration.
@@ -16,10 +22,12 @@
 name: CI
 
 on:
-  push:
-    branches: [master]
   pull_request:
     branches: [master]
+  # Called by acr-publish.yml on every push to master. There is deliberately no
+  # `push` trigger here: it would run this whole workflow a second time,
+  # alongside the copy acr-publish.yml already runs for the same commit.
+  workflow_call:
 
 # Least privilege. This workflow reads code and writes a check summary; it has
 # no reason to be able to push, publish a package, or open an issue. The
@@ -127,9 +135,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          # Built and discarded. Publishing happens in publish.yml, on tags
-          # only — a pull request from a fork must never be able to push an
-          # image to the registry.
+          # Built and discarded. Publishing happens only in acr-publish.yml,
+          # after this workflow passes, on master — a pull request from a fork
+          # must never be able to push an image to the registry.
           push: false
           load: true
           tags: knowledge-assistant-api:ci
@@ -148,6 +156,8 @@ jobs:
             -e Azure__AiFoundry__Endpoint=https://example.invalid/ \
             -e Azure__AiFoundry__ChatDeploymentName=placeholder \
             -e Azure__AiFoundry__EmbeddingDeploymentName=placeholder \
+            -e Azure__AiFoundry__Agent__ProjectEndpoint=https://example.invalid/api/projects/placeholder \
+            -e Azure__AiFoundry__Agent__Version=1 \
             -e Observability__HealthChecks__EnableDependencyChecks=false \
             knowledge-assistant-api:ci
 
@@ -164,3 +174,44 @@ jobs:
           docker logs smoke
           docker rm -f smoke > /dev/null
           exit 1
+
+  # The web client, verified the same way the API is: the checks a developer
+  # runs locally, in the order that fails fastest. `npm ci` and not `npm
+  # install` — ci installs the lockfile exactly and fails if package.json and
+  # the lockfile disagree, which is the whole point of committing a lockfile.
+  web:
+    name: Build web client
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: KnowledgeAssistant.Web
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # 20.x, matching the floor Vite 8 declares (^20.19 || >=22.12) and the
+          # version used locally. The npm cache is keyed on the lockfile, which
+          # lives under the client directory rather than the repo root.
+          node-version: 20.x
+          cache: npm
+          cache-dependency-path: KnowledgeAssistant.Web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        # `tsc -b --noEmit` over the project references. Vite strips types
+        # without checking them, so a build alone would not catch a type error.
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build

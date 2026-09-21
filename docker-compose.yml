@@ -1,8 +1,8 @@
 # ═══════════════════════════════════════════════════════════════════════════
 #  KnowledgeAssistant — local development stack
 #
-#      cp .env.example .env      # then fill in your endpoints
-#      az login                  # the container reuses this login
+#      cp .env.example .env      # then fill in your endpoints and IDENTITY_HEADER
+#      docker compose run --rm azure-token-proxy az login --use-device-code
 #      docker compose up --build
 #
 #      API      http://localhost:8080
@@ -15,6 +15,17 @@
 #  Documents are stored in Azurite, the local Blob Storage emulator, so uploads
 #  cost nothing and need no storage account. Azure AI Search and Azure AI
 #  Foundry have no emulator, so those still come from .env and your own login.
+#
+#  ── How the API container authenticates: a local managed identity ──────────
+#
+#  The API image is the production image and has no Azure CLI. In compose it
+#  runs ManagedIdentityCredential (Azure:Credential:DevelopmentCredential =
+#  ManagedIdentity) against azure-token-proxy, a dev-only container that holds
+#  YOUR `az login` in its own volume and answers the managed identity protocol
+#  (IDENTITY_ENDPOINT / IDENTITY_HEADER). No secret is baked into any image,
+#  and the host's token cache is never mounted: on Windows it is DPAPI-encrypted
+#  and unreadable from Linux anyway. This reproduces the credential TYPE used in
+#  Azure, not Azure's identity — the calls run as you, with your roles.
 #
 #  Azurite accepts only its well-known shared key, over plain HTTP. The API
 #  therefore reaches it through Azure:Storage:ConnectionString — a path the
@@ -50,9 +61,12 @@ services:
       # in .env, because inside this network the collector is always this host.
       Observability__Otlp__Endpoint: http://aspire-dashboard:18889
 
-      # The az-CLI token cache is mounted at a fixed path below; this tells the
-      # Azure SDK where to look for it inside the container.
-      AZURE_CONFIG_DIR: /home/app/.azure
+      # Managed identity, answered by azure-token-proxy below. IDENTITY_HEADER is
+      # a local value shared by the two containers (the platform uses one the
+      # same way, to stop request forgery); it is not an Azure credential.
+      Azure__Credential__DevelopmentCredential: ManagedIdentity
+      IDENTITY_ENDPOINT: http://azure-token-proxy:8079/token
+      IDENTITY_HEADER: "${IDENTITY_HEADER:?set IDENTITY_HEADER in .env to any random value — see .env.example}"
 
       # Blob storage goes to the azurite service below. Set here rather than in
       # .env so it overrides whatever .env says: `environment` takes precedence
@@ -68,18 +82,9 @@ services:
     env_file:
       - .env
 
-    volumes:
-      # Your `az login` token cache, read-only.
-      #
-      # ro is not decoration. The cache holds live refresh tokens for your own
-      # account; a writable mount would let anything in the container modify or
-      # replace them. Read-only is enough for DefaultAzureCredential, which only
-      # reads.
-      #
-      # Set AZURE_CONFIG_DIR in .env to your host path — Docker cannot expand ~.
-      - "${AZURE_CONFIG_DIR:?set AZURE_CONFIG_DIR in .env to your .azure directory — see .env.example}:/home/app/.azure:ro"
-
     depends_on:
+      azure-token-proxy:
+        condition: service_started
       aspire-dashboard:
         condition: service_started
       azurite:
@@ -94,6 +99,24 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 3
+
+  # Development-only token endpoint (tools/azure-token-proxy). Sign in once:
+  #
+  #     docker compose run --rm azure-token-proxy az login --use-device-code
+  #
+  # The login lives in the azure-cli-profile volume, never in an image.
+  # No `ports:` on purpose — only containers on this network can reach it, and
+  # it serves only the audiences the API calls.
+  azure-token-proxy:
+    build:
+      context: tools/azure-token-proxy
+    image: knowledge-assistant-token-proxy:local
+    container_name: knowledge-assistant-token-proxy
+    restart: unless-stopped
+    environment:
+      IDENTITY_HEADER: "${IDENTITY_HEADER:?set IDENTITY_HEADER in .env to any random value — see .env.example}"
+    volumes:
+      - azure-cli-profile:/root/.azure
 
   # The .NET Aspire dashboard, used here purely as a standalone OTLP collector
   # and trace viewer. The application already emits OpenTelemetry through BCL
@@ -141,3 +164,6 @@ services:
 
 volumes:
   azurite-data:
+  # The developer's `az login` for azure-token-proxy. `docker compose down -v`
+  # signs out.
+  azure-cli-profile:

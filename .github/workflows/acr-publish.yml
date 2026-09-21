@@ -1,0 +1,165 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Publish to Azure Container Registry — validate, build, push. Nothing else.
+#
+#  Every push to the default branch is validated by ci.yml — called here, not
+#  copied: backend build and tests, web client checks, container smoke test —
+#  and, if that passes, built into a container image and pushed to the
+#  EXISTING registry acrd6d305e4 under an immutable commit-SHA tag.
+#
+#  ── This is CI plus image publishing. It is NOT continuous deployment ──────
+#
+#  The workflow ends at the push. It never calls `az containerapp update`, never
+#  restarts a revision, never touches ingress, scale, or any other Azure
+#  resource. The Container App running in Azure was deployed and verified by
+#  hand (see DEPLOYMENT.md §7) and stays on the image it was given until a human
+#  points it at a new tag. A pipeline that deploys on every commit is a fine
+#  thing to have when somebody is on call for the result; this project is a
+#  portfolio repository, and an image in a registry is the honest deliverable.
+#
+#  ── Why there is no registry password here ─────────────────────────────────
+#
+#  Authentication is GitHub OIDC federated with Entra ID: the runner exchanges
+#  the short-lived token GitHub mints for this specific repository and ref for
+#  an Azure access token. Nothing long-lived is stored, so there is nothing to
+#  rotate and nothing to leak. The registry's admin user stays disabled.
+#
+#  The identity it federates with holds exactly one role — AcrPush, scoped to
+#  this one registry. It cannot deploy, restart, read Search or Blob, or create
+#  anything. DEPLOYMENT.md §8 has the commands that created it.
+#
+#  The three repository secrets below are identifiers, not credentials: an
+#  application's client id, a tenant id, and a subscription id. They are stored
+#  as secrets rather than variables only to keep them out of a public log.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: Publish to ACR
+
+on:
+  push:
+    # master, because that is this repository's default branch — the "main"
+    # branch by role, whatever it is called. Changing the name here without
+    # changing it in the federated credential's subject would leave a workflow
+    # that runs and then cannot log in.
+    branches: [master]
+  workflow_dispatch:
+
+# Least privilege, on both sides of the trust. The workflow as a whole may only
+# read the source; `id-token: write` is granted to the one job that signs in to
+# Azure (below), so the validation jobs never hold it. Nothing else is granted:
+# this workflow does not write to the repository, publish a package, or comment
+# on anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: acr-publish-${{ github.ref }}
+  # Never cancel a publish in flight: a half-cancelled push can leave a
+  # manifest referring to layers that were never uploaded.
+  cancel-in-progress: false
+
+env:
+  REGISTRY: acrd6d305e4.azurecr.io
+  # The repository that already exists in the registry. A second name would
+  # split the image history in two for no reason.
+  IMAGE_NAME: knowledge-assistant-api
+
+jobs:
+  # The gate: the whole of ci.yml, run for this commit. Called rather than
+  # trusted to have run, because this workflow is what decides an image is
+  # worth publishing — and called rather than copied, so the checks that gate a
+  # pull request and the checks that gate an image cannot drift apart.
+  validate:
+    name: Validate
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Push image to ACR
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Only this repository, only master. A fork pushing to its own master, or
+    # a manual run started from another branch, has no matching federated
+    # credential: without this guard the job would fail at sign-in with a
+    # confusing authentication error instead of being skipped. It also means
+    # no branch other than master can ever put an image in the registry.
+    if: github.repository == 'MetinTopcu/KnowledgeAssistant' && github.ref == 'refs/heads/master'
+
+    permissions:
+      contents: read
+      # Mints the OIDC token azure/login exchanges. The one permission
+      # federation needs, and useless without the matching federated
+      # credential on the Azure side, which names this repository and branch.
+      id-token: write
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          # No client-secret input: its absence is what selects the federated
+          # flow. The runner presents GitHub's OIDC token; Entra ID checks it
+          # against the credential registered for this repository and branch.
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign in to the registry
+        # `az acr login` exchanges the Entra token for a short-lived registry
+        # refresh token and hands it to the local Docker daemon. No registry
+        # username or password exists anywhere in this flow, and the
+        # registry's admin user stays disabled.
+        run: az acr login --name ${{ env.REGISTRY }}
+
+      - name: Stamp the build time
+        id: stamp
+        # Computed here rather than taken from the event payload: the payload's
+        # timestamps describe the push, not the build, and an image label that
+        # says "created" should mean what it says.
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # One tag, the full commit SHA — immutable and unambiguous. Every
+          # image in the registry can be traced to the exact commit that
+          # produced it, and no later run can move a tag out from under a
+          # revision that is already deployed. `latest` is deliberately absent:
+          # nothing deploys from it here, and a moving tag in a registry whose
+          # consumer pins a digest is a label that can only mislead.
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          # amd64 only. Container Apps runs amd64, and building arm64 under
+          # QEMU roughly doubles the run for an image nothing pulls on arm.
+          platforms: linux/amd64
+          # Merged with the OCI labels the Dockerfile bakes in; these add the
+          # revision and build time, which the Dockerfile cannot know.
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.stamp.outputs.created }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summarise
+        # The digest, in the run summary, so the image can be deployed by
+        # digest rather than by tag if anyone chooses to.
+        run: |
+          {
+            echo "### Image published"
+            echo
+            echo '```'
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+            echo "digest: ${{ steps.push.outputs.digest }}"
+            echo '```'
+            echo
+            echo "Nothing was deployed. The Container App keeps running the image it was last given;"
+            echo "pointing it at this one is a manual step — see DEPLOYMENT.md."
+          } >> "$GITHUB_STEP_SUMMARY"

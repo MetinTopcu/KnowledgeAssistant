@@ -21,7 +21,6 @@ export function useNavigationChords(): void {
     () => ({
       a: () => void navigate(routePaths.ask),
       g: () => void navigate(routePaths.agent),
-      r: () => void navigate(routePaths.runs),
       d: () => void navigate(routePaths.documents),
       h: () => void navigate(routePaths.status),
       s: () => void navigate(routePaths.settings),

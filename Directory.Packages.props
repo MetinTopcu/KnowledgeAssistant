@@ -52,7 +52,6 @@
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.1" />
     <PackageVersion Include="Azure.Search.Documents" Version="12.0.0" />
     <PackageVersion Include="Azure.AI.DocumentIntelligence" Version="1.0.0" />
-    <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
     <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 
     <!--
@@ -65,11 +64,12 @@
       no resolution — it makes a dependency the Infrastructure code names directly
       into one this file records, which is the whole point of CPM.
 
-      OpenAI is declared for the same reason and is the version this graph already
-      resolved to: Azure.AI.Extensions.OpenAI requires 2.9.1 and Azure.AI.OpenAI
-      2.1.0 requires only 2.1.0, so 2.9.1 wins whether or not it is written down.
-      Written down, a future package that would quietly move it fails the restore
-      instead.
+      OpenAI is declared for the same reason: Azure.AI.Extensions.OpenAI requires
+      2.9.1. It is also the client for chat and embeddings, pointed at the Foundry
+      resource's /openai/v1/ endpoint. Azure.AI.OpenAI is deliberately absent: its
+      only GA release (2.1.0) is compiled against OpenAI 2.1.0 and fails at run
+      time on 2.9.1 (MissingMethodException on every chat call) even though
+      restore and build are clean.
     -->
     <PackageVersion Include="Azure.AI.Projects.Agents" Version="2.0.0" />
     <PackageVersion Include="Azure.AI.Extensions.OpenAI" Version="2.0.0" />

@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { uploadDocument } from '@/features/document-upload/api/uploadDocument';
@@ -7,6 +8,7 @@ import {
   type UploadItem,
 } from '@/features/document-upload/model/uploadItem';
 import { isApiRequestError } from '@/shared/api/ApiRequestError';
+import { documentsQueryKey } from '@/shared/api/queryKeys';
 
 export interface UploadQueue {
   readonly items: readonly UploadItem[];
@@ -33,6 +35,7 @@ export interface UploadQueue {
  * item. The ref is the source of truth and `commit` is the only writer.
  */
 export function useUploadQueue(): UploadQueue {
+  const queryClient = useQueryClient();
   const [items, setItems] = useState<readonly UploadItem[]>([]);
 
   const itemsRef = useRef<readonly UploadItem[]>([]);
@@ -81,6 +84,13 @@ export function useUploadQueue(): UploadQueue {
         });
 
         patch(item.id, { status: 'succeeded', result });
+
+        // The corpus now contains something it did not a moment ago, and the
+        // Documents screen caches its listing. Invalidating here is what makes
+        // "upload, then look at the list" show the document rather than a
+        // cached answer from before it existed. The key lives in shared/ so
+        // this does not become an import of another feature.
+        await queryClient.invalidateQueries({ queryKey: documentsQueryKey });
       } catch (error) {
         if (controller.signal.aborted) {
           patch(item.id, { status: 'cancelled' });
@@ -95,7 +105,7 @@ export function useUploadQueue(): UploadQueue {
         controllerRef.current = null;
       }
     },
-    [patch],
+    [patch, queryClient],
   );
 
   const pump = useCallback(async () => {

@@ -1,6 +1,12 @@
 # KnowledgeAssistant — Product Design Specification
 
-**Status:** Proposal, awaiting approval. No implementation has begun.
+**Status:** Approved and partially implemented. This document remains the
+specification — it describes the intended product, not the current build. What
+exists today is `KnowledgeAssistant.Web`: the Ask console, the Agent screen, the
+upload panel, Documents, Health, and Settings. Screens marked below as depending
+on an API gap (§15) are **not** built, and the navigation rail deliberately does
+not link to them: a rail entry for a screen that answers 404 is worse than a
+short rail. Sign-in is not built either — the API has no user authentication.
 **Version:** 1.0 · 2026-08-04
 **Scope:** Complete product experience — journeys, screens, navigation, layout, components, and the full design token system.
 
@@ -204,19 +210,20 @@ Four primary destinations. Everything else is a detail view, an overlay, or a se
 
 ## 6. Screen list
 
-| # | Screen | Route | Backed by | Priority |
-|---|---|---|---|---|
-| 0 | Sign in | `/signin` | Entra ID (see §15) | P0 |
-| 1 | **Ask console** | `/` | `POST /api/questions`, `POST /api/questions/agent` | **P0** |
-| 2 | Run detail | `/runs/:id` | client store; see §15 | P0 |
-| 3 | Runs | `/runs` | client store; see §15 | P1 |
-| 4 | Documents | `/documents` | needs `GET /api/documents` | P1 |
-| 5 | Document detail | `/documents/:id` | needs `GET /api/documents/:id` | P2 |
-| 6 | Upload (panel) | overlay on 1 & 4 | `POST /api/documents` | P0 |
-| 7 | Health | `/health` | `GET /health` | P1 |
-| 8 | Settings | `/settings/*` | local + config read | P2 |
-| 9 | Command palette | overlay | client | P1 |
-| 10 | System error pages | `403 / 404 / 500 / offline` | — | P1 |
+| # | Screen | Route | Backed by | Priority | Built |
+|---|---|---|---|---|---|
+| 0 | Sign in | `/signin` | Entra ID (see §15) | P0 | No — the API has no user authentication |
+| 1 | **Ask console** | `/` | `POST /api/questions` | **P0** | Yes |
+| 1b | **Agent** | `/agent` | `POST /api/questions/agent` | **P0** | Yes — split from Ask, because the two make different promises about cost |
+| 2 | Run detail | `/runs/:id` | client store; see §15 | P0 | No |
+| 3 | Runs | `/runs` | client store; see §15 | P1 | No — and not in the rail, see the status note above |
+| 4 | Documents | `/documents` | `GET /api/documents` | P1 | Yes. The columns are what the index stores — no size or chunk count |
+| 5 | Document detail | `/documents/:id` | needs `GET /api/documents/:id` | P2 | No |
+| 6 | Upload (panel) | overlay on 1 & 4 | `POST /api/documents` | P0 | Yes |
+| 7 | Health | `/status` | `GET /health` | P1 | Yes — at `/status`, so the client route cannot shadow the API's own probes |
+| 8 | Settings | `/settings/*` | local + config read | P2 | Yes |
+| 9 | Command palette | overlay | client | P1 | No |
+| 10 | System error pages | `403 / 404 / 500 / offline` | — | P1 | Yes |
 
 ---
 
@@ -822,7 +829,7 @@ The answer text below it renders at `fg.muted` rather than `fg.default`, and the
 | `⌘/` | Toggle Retrieval ⇄ Agent |
 | `⌘⇧C` | Copy run as Markdown with citations |
 | `⌘B` / `⌘⌥B` | Toggle nav rail / inspector |
-| `g` then `a` `r` `d` `h` | Go to Ask · Runs · Documents · Health |
+| `g` then `a` `g` `d` `h` `s` | Go to Ask · Agent · Documents · Health · Settings (`g r` for Runs is absent while that screen is) |
 | `j` / `k` | Move between evidence or table rows |
 | `↵` / `→` | Expand focused row · open detail |
 | `o` | Open the focused row's source document |
@@ -856,7 +863,7 @@ The design is deliberately honest about what the current API cannot do. These ar
 | # | Gap | Blocks | Note |
 |---|---|---|---|
 | 1 | **No user authentication** in the API. `DefaultAzureCredential` authenticates the *service to Azure*, not a *user to the service*. | Sign-in, identity in the rail, per-user defaults, audit | Recommend Entra ID at the platform edge (Container Apps / App Service authentication) plus a validated bearer token, so the "no secret exists" guarantee is preserved |
-| 2 | **No `GET /api/documents`.** The upload response notes there is no database row and no read endpoint. | Documents, Document detail, corpus counts, the `Low yield` audit | Highest-value addition — three screens depend on it |
+| 2 | ~~**No `GET /api/documents`.**~~ **Closed.** The endpoint returns the corpus, newest first, bounded by `maxResults`. What it *cannot* return is size, content type, or chunk count: the index never stored them, so adding those columns means an index schema change and a re-ingest. | Document detail and corpus counts still | Document detail (`GET /api/documents/:id`) remains open |
 | 3 | **No source document access.** The container is private and the upload response deliberately withholds the blob URI. | "Open source document" from every citation | Needs a proxied or short-lived-SAS read endpoint. **Without it, the verification journey (J3) terminates at the chunk text** |
 | 4 | **`AnswerCitation.BlobUri` is returned to callers**, while `UploadDocumentResponse` deliberately withholds the URI to avoid publishing storage topology. | — | An inconsistency worth resolving before the UI is built. The design does **not** render `BlobUri`; it uses `DocumentId` + `ChunkId`, so resolving this either way requires no design change |
 | 5 | **No run persistence.** | Runs history, permalinks, incident correlation | Until it exists, Runs is browser-local, capped, and the screen says so plainly in a caption. Permalinks would 404 for a colleague, so the share action is hidden rather than broken |
@@ -872,7 +879,7 @@ Screens 4, 5, and parts of 3 are specified in full here so the API work can be s
 
 1. **Default theme** — this specification proposes **dark by default** with full light parity. If enterprise procurement demos are the primary first impression, light-by-default is the safer call. One-line change either way.
 2. **Scope of the first build** — the recommendation is Ask console + Upload panel + Health (screens 1, 6, 7, plus run detail as a client-local view). That is shippable against the API *as it exists today*, with no backend changes at all.
-3. **API gap priority** — #2 (`GET /api/documents`) unlocks the most surface; #3 (source access) unlocks the most user value. They are different bets.
+3. **API gap priority** — #2 (`GET /api/documents`) is closed; #3 (source access) now unlocks the most user value.
 4. **Runs history without persistence** — ship it browser-local with an honest caption, or hold the screen until gap #5 is closed.
 5. **Font licensing** — Inter is SIL OFL and self-hostable. If the organization requires Segoe UI Variable exclusively, the scale holds unchanged; only the stack order swaps.
 

@@ -14,5 +14,7 @@ database. You must be able to delete the entire index and rebuild it from here.
 configuration classes, keeping Domain entities free of infrastructure concerns.
 Repositories return **Domain entities**, never DTOs and never provider types.
 
-**Note:** no ORM package is wired in this scaffold, since the stack you specified
-did not name one. Add it here when the write model is settled.
+**Note:** no ORM package is wired, and this folder is deliberately empty. No
+part of this service owns durable write state — a document's bytes live in Blob
+Storage and its metadata in a rebuildable Search projection — so an ORM would be
+an abstraction with nothing to map. Add it here when a write model exists.

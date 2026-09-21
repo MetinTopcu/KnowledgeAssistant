@@ -88,13 +88,23 @@ Run from the `KnowledgeAssistant.Api` folder (or pass `--project`). Note the
 dotnet user-secrets set "Azure:Storage:ServiceUri"  "https://<account>.blob.core.windows.net/"
 dotnet user-secrets set "Azure:Search:Endpoint"     "https://<service>.search.windows.net/"
 dotnet user-secrets set "Azure:AiFoundry:Endpoint"  "https://<resource>.services.ai.azure.com/"
-dotnet user-secrets set "Azure:AiFoundry:ChatDeploymentName"      "gpt-4o-mini"
-dotnet user-secrets set "Azure:AiFoundry:EmbeddingDeploymentName" "text-embedding-3-small"
+dotnet user-secrets set "Azure:AiFoundry:ChatDeploymentName"      "gpt-5-mini"
+dotnet user-secrets set "Azure:AiFoundry:EmbeddingDeploymentName" "text-embedding-3-large"
 ```
 
 Set `Azure:Storage:ServiceUri` only if you use a real dev storage account.
 `appsettings.Development.example.json` defaults to Azurite through
 `Azure:Storage:ConnectionString`, and the host refuses to start with both set.
+
+**The models, and why the defaults look the way they do.** The verified
+deployments are `text-embedding-3-large` (3072-dimensional vectors) and
+`gpt-5-mini`. `EmbeddingModelName` and `EmbeddingDimensions` default to that
+embedding model, and for a known model the host refuses to start with any other
+dimension — `knowledge-chunks` is created from it and cannot be changed in place.
+`ChatTemperature` and `Agent:Temperature` default to **unset**, which sends no
+temperature at all: `gpt-5-mini`, a reasoning model, accepts only its default and
+answers `400 unsupported_value` to anything else. Set `0.0` only for a
+non-reasoning deployment.
 
 ```powershell
 dotnet user-secrets list      # show all
@@ -102,14 +112,36 @@ dotnet user-secrets remove "Azure:Search:Endpoint"
 dotnet user-secrets clear     # wipe
 ```
 
-### Sign in so `DefaultAzureCredential` can find you
+### Sign in with the Azure CLI
 
-With no key in play, the credential chain uses **your own identity** locally —
-via Visual Studio, VS Code, or:
+With no key in play, the application uses **your own identity** locally. In the
+`Development` environment that identity comes from the Azure CLI only
+(`AzureCliCredential`); every other environment keeps the full
+`DefaultAzureCredential` chain and resolves to a managed identity in Azure.
 
 ```powershell
 az login
 ```
+
+Development skips the chain because, on a laptop, it was measured spending ~27 s
+probing for a managed identity and ~24 s failing in Visual Studio before the CLI
+answered — long enough for every readiness probe to time out. Visual Studio and
+VS Code sign-ins are therefore not used locally.
+
+**In Docker Compose** the API container is the production image, which has no
+Azure CLI. There, `Azure:Credential:DevelopmentCredential=ManagedIdentity` makes
+Development use `ManagedIdentityCredential` instead, answered by the dev-only
+`azure-token-proxy` container (`tools/azure-token-proxy`), which holds your own
+`az login` in a Docker volume and speaks the managed identity protocol
+(`IDENTITY_ENDPOINT` / `IDENTITY_HEADER`):
+
+```powershell
+docker compose run --rm azure-token-proxy az login --use-device-code
+docker compose up --build
+```
+
+That reproduces the credential *type* used in Azure, not Azure's identity: calls
+still run as you, with your roles. Outside Development the setting is ignored.
 
 Then grant your user account the same RBAC roles listed in §5. If a call returns
 `403`, the cause is almost always a missing role assignment, not a bad endpoint.
@@ -144,8 +176,13 @@ everywhere.
 | `Azure:AiFoundry:EmbeddingBatchSize` | `Azure__AiFoundry__EmbeddingBatchSize` |
 | `Azure:AiFoundry:ChatMaxOutputTokens` | `Azure__AiFoundry__ChatMaxOutputTokens` |
 | `Azure:AiFoundry:ChatTemperature` | `Azure__AiFoundry__ChatTemperature` |
+| `Azure:AiFoundry:EmbeddingModelName` | `Azure__AiFoundry__EmbeddingModelName` |
+| `Azure:AiFoundry:EmbeddingDimensions` | `Azure__AiFoundry__EmbeddingDimensions` |
+| `Azure:AiFoundry:Agent:ProjectEndpoint` | `Azure__AiFoundry__Agent__ProjectEndpoint` |
+| `Azure:AiFoundry:Agent:Version` | `Azure__AiFoundry__Agent__Version` |
 | `Azure:DocumentIntelligence:Endpoint` | `Azure__DocumentIntelligence__Endpoint` |
 | `Azure:Credential:ManagedIdentityClientId` | `Azure__Credential__ManagedIdentityClientId` |
+| `Azure:Credential:DevelopmentCredential` | `Azure__Credential__DevelopmentCredential` (Development only) |
 | `Chunking:MaxChunkSize` | `Chunking__MaxChunkSize` |
 | `Chunking:OverlapSize` | `Chunking__OverlapSize` |
 | *(host)* | `ASPNETCORE_ENVIRONMENT=Production` |
@@ -174,6 +211,20 @@ Never place a secret in a Bicep/ARM parameter file, a pipeline YAML, or a
 Dockerfile `ENV` — all three are committed artefacts, and a `docker history`
 call will happily print the last one back to you.
 
+### CI holds no Azure credential either
+
+`.github/workflows/acr-publish.yml` pushes images to Azure Container Registry
+and stores no password to do it: it signs in with **GitHub OIDC federated with
+Entra ID**, so the only thing GitHub holds is three identifiers —
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`. They identify;
+they do not authorise. Authorisation comes from a federated credential on the
+Azure side that names this repository and branch, and from one role assignment
+(`AcrPush`, on one registry).
+
+The registry's admin user stays disabled. Enabling it to simplify a pipeline
+would recreate exactly the long-lived shared credential this whole document
+exists to avoid. See DEPLOYMENT.md §8.
+
 ---
 
 ## 5. RBAC roles for the app's managed identity
@@ -183,16 +234,19 @@ data-plane roles. "Contributor" on the resource is **not** sufficient — it gra
 management-plane rights, not data access, which is a common and confusing
 source of `403`s.
 
-| Resource | Role |
-|---|---|
-| Storage account | `Storage Blob Data Contributor` |
-| AI Search | `Search Index Data Contributor` (read/write documents) |
-| AI Search | `Search Service Contributor` (create/update the index) |
-| AI Foundry / OpenAI | `Cognitive Services OpenAI User` |
-| AI Foundry project | `Azure AI User` (run the agent) |
-| AI Foundry project | `Azure AI Project Manager` *(only if `Azure:AiFoundry:Agent:Version` is left empty)* |
-| Document Intelligence | `Cognitive Services User` *(only if an endpoint is configured)* |
-| Key Vault | `Key Vault Secrets User` |
+| Resource | Role | Narrowest scope that works |
+|---|---|---|
+| Storage | `Storage Blob Data Contributor` | The documents **container** |
+| AI Search | `Search Index Data Contributor` (read/write documents) | The search service |
+| AI Search | `Search Service Contributor` (read and create the two indexes) | The search service |
+| AI Foundry account | `Azure AI User` — shown as **Foundry User** in the portal | The **account** — chat, embeddings and Document Intelligence are account-level endpoints |
+| AI Foundry project | `Azure AI Project Manager` *(Development only, while no version is pinned)* | The project |
+| Container registry | `AcrPull` | The registry — the app *pulls*; CI's separate OIDC identity is the only thing that pushes |
+| Key Vault | `Key Vault Secrets User` *(only if a secret is sourced from one)* | The vault |
+
+`Azure AI User` carries the data actions for OpenAI inference, Document
+Intelligence, and agents, so `Cognitive Services OpenAI User` and
+`Cognitive Services User` are redundant beside it.
 
 Grant the same roles to each developer's own account for local development.
 
@@ -200,35 +254,33 @@ Grant the same roles to each developer's own account for local development.
 
 `Azure AI Project Manager` is only needed because an empty
 `Azure:AiFoundry:Agent:Version` lets the running process create an agent version
-on the first question. That is convenient for a first run and wrong for
-production: it gives the application permission to modify the project it is
-supposed to only read from, and it puts the agent's instructions and tool schema
-outside the deployment that is meant to define them.
+on the first question — and that is now allowed **only in Development**. Any
+other environment refuses to start without a pinned version.
 
-Pin the version and the role goes away:
+1. In Development, with the role on your own account, ask one agent question.
+2. Take the version from the log: `Created Foundry agent '...' version N` (or
+   `Reusing ... version N` when a matching one exists).
+3. Set `Azure:AiFoundry:Agent:Version=N` for every deployed environment.
 
-1. Run once with the role granted, or provision the agent out of band.
-2. Take the version from the log line: `Created Foundry agent '...' version N`.
-3. Set `Azure:AiFoundry:Agent:Version` to it and drop the role assignment.
+A pinned version is **verified, not trusted**: on first use the app reads that
+version and compares its stored definition fingerprint (instructions, tool
+schema, model deployment, temperature) with the one this build computes. A
+mismatch fails the agent route with a log naming both fingerprints — changing
+any of those inputs means provisioning and pinning a new version. With a version
+pinned, the app reads one version and creates nothing — `Azure AI User` is
+sufficient.
 
-With a version pinned, the app lists nothing and creates nothing — `Azure AI User`
-is sufficient.
+### The service-side vectorizer is disabled
 
-### The vectorizer needs a role assignment on a *different* identity
+`Azure:Search:EnableVectorizer` is `false`, in `appsettings.json` and as the code
+default, and is not used. The application generates query embeddings itself
+through `IEmbeddingService` and submits a `VectorizedQuery`, so query and corpus
+vectors always come from the same configured model. The chunk index therefore
+declares no Azure OpenAI vectorizer.
 
-`Azure:Search:EnableVectorizer` declares integrated vectorization on the chunk
-index, so the search service can embed a query string at query time. That call is
-made by the **search service's own managed identity**, not by this application's
-— so granting the app `Cognitive Services OpenAI User` does nothing for it:
-
-| Identity | Resource | Role |
-|---|---|---|
-| **Search service** managed identity | AI Foundry / OpenAI | `Cognitive Services OpenAI User` |
-
-Enable a system-assigned identity on the search service and assign that role. The
-index will be created successfully without it — the vectorizer is only exercised
-by queries, which nothing issues yet — so a missing grant surfaces later, as a
-failing search rather than a failing deployment.
+Consequently the search service needs **no managed identity and no role on AI
+Foundry** — only the application's identity calls Azure OpenAI, under the roles
+listed above.
 
 ---
 

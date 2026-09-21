@@ -62,8 +62,9 @@ public sealed class BlobStorageCompositionTests
 
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IHostEnvironment>(new StubHostEnvironment(environment));
-        services.AddInfrastructure(configuration);
+        var hostEnvironment = new StubHostEnvironment(environment);
+        services.AddSingleton<IHostEnvironment>(hostEnvironment);
+        services.AddInfrastructure(configuration, hostEnvironment);
 
         return services.BuildServiceProvider();
     }

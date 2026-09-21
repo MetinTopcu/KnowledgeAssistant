@@ -1,7 +1,7 @@
-import { FileText, PlugZap } from 'lucide-react';
+import { FileText } from 'lucide-react';
 
 import { DocumentsTable } from '@/features/documents/components/DocumentsTable';
-import { isCapabilityUnavailable, useDocuments } from '@/features/documents/model/useDocuments';
+import { useDocuments } from '@/features/documents/model/useDocuments';
 import { Alert } from '@/shared/components/Alert';
 import { EmptyState } from '@/shared/components/EmptyState';
 import { ProblemDetailsView } from '@/shared/components/ProblemDetailsView';
@@ -13,12 +13,10 @@ const SKELETON_WIDTHS = ['w-3/5', 'w-2/5', 'w-4/5', 'w-1/2', 'w-3/4'];
 /**
  * The Documents screen.
  *
- * It asks the API for the corpus and reports what it gets back. Today that is a
- * 405, because `api/documents` is routed for `POST` only — so the screen says
- * exactly that, in the empty state, rather than showing an invented list or a
- * misleading "no documents yet". Nothing here is stubbed: when the endpoint
- * gains a `GET`, the table below starts rendering real rows with no change to
- * this file.
+ * It asks the API for the corpus and reports what it gets back — nothing here
+ * is derived, judged, or stubbed. Three outcomes, three renderings: a corpus
+ * with documents, a corpus with none, and a listing that failed. The middle one
+ * is deliberately not an error: "nothing has been ingested" is an answer.
  */
 export function DocumentsRoute() {
   const query = useDocuments();
@@ -33,21 +31,13 @@ export function DocumentsRoute() {
         </div>
       )}
 
-      {query.isError && isCapabilityUnavailable(query.error) && (
-        <EmptyState
-          icon={PlugZap}
-          title="The document list is not available yet"
-          description="This API can ingest documents but cannot yet list them: GET /api/documents is not implemented. Uploads still work and are indexed — they simply cannot be shown here until the endpoint exists."
-        />
-      )}
-
-      {query.isError && !isCapabilityUnavailable(query.error) && (
+      {query.isError && (
         <Alert variant="danger" title="The corpus could not be loaded">
           <ProblemDetailsView problem={query.error.problem} />
         </Alert>
       )}
 
-      {query.isSuccess && query.data.length === 0 && (
+      {query.isSuccess && query.data.documents.length === 0 && (
         <EmptyState
           icon={FileText}
           title="The corpus is empty"
@@ -55,10 +45,21 @@ export function DocumentsRoute() {
         />
       )}
 
-      {query.isSuccess && query.data.length > 0 && (
+      {query.isSuccess && query.data.documents.length > 0 && (
         <section className="flex flex-col gap-2">
-          <h2 className="eyebrow text-fg-subtle">Corpus · {query.data.length} documents</h2>
-          <DocumentsTable documents={query.data} />
+          <h2 className="eyebrow text-fg-subtle">
+            Corpus · {query.data.count} document{query.data.count === 1 ? '' : 's'}
+            {query.data.truncated && ', newest first'}
+          </h2>
+
+          {query.data.truncated && (
+            <p className="text-ui text-fg-muted">
+              This is one page of the corpus. There may be more documents than are shown here —
+              the API returns the most recent uploads first and does not page.
+            </p>
+          )}
+
+          <DocumentsTable documents={query.data.documents} />
         </section>
       )}
     </div>

@@ -44,27 +44,42 @@ internal static class ChunkIndexSchema
         AzureSearchOptions searchOptions,
         AzureOpenAIOptions openAIOptions)
     {
+        // Every attribute of the non-vector fields is set explicitly, false
+        // included. An attribute left null is omitted from the request, and the
+        // service then applies its own default — true for filterable, sortable,
+        // and facetable — so a field meant to be "neither filterable nor
+        // searchable" was created as all of them. Observed against a live service
+        // (api-version 2024-07-01): ChunkText and BlobUri came back filterable,
+        // sortable, and facetable, each costing index storage for a query this
+        // application never issues. None of these can be changed once the index
+        // exists.
         var fields = new List<SearchField>
         {
             // The key. Filterable so a specific chunk can be addressed directly.
             new(nameof(ChunkSearchDocument.ChunkId), SearchFieldDataType.String)
             {
                 IsKey = true,
+                IsSearchable = false,
                 IsFilterable = true,
+                IsSortable = false,
+                IsFacetable = false,
             },
 
             // The grouping field: every operation that treats a document as a unit
             // — re-index, delete, count — filters on this.
             new(nameof(ChunkSearchDocument.DocumentId), SearchFieldDataType.String)
             {
+                IsSearchable = false,
                 IsFilterable = true,
                 IsSortable = true,
+                IsFacetable = false,
             },
 
             new(nameof(ChunkSearchDocument.ChunkOrder), SearchFieldDataType.Int32)
             {
                 IsFilterable = true,
                 IsSortable = true,
+                IsFacetable = false,
             },
 
             // Retrievable and searchable: a retrieval hit has to be able to hand
@@ -72,11 +87,20 @@ internal static class ChunkIndexSchema
             new(nameof(ChunkSearchDocument.ChunkText), SearchFieldDataType.String)
             {
                 IsSearchable = true,
+                IsFilterable = false,
+                IsSortable = false,
+                IsFacetable = false,
             },
 
             // Neither filterable nor searchable — a pointer back to the source,
             // returned with a hit and never queried on.
-            new(nameof(ChunkSearchDocument.BlobUri), SearchFieldDataType.String),
+            new(nameof(ChunkSearchDocument.BlobUri), SearchFieldDataType.String)
+            {
+                IsSearchable = false,
+                IsFilterable = false,
+                IsSortable = false,
+                IsFacetable = false,
+            },
 
             new(nameof(ChunkSearchDocument.UploadedAt), SearchFieldDataType.DateTimeOffset)
             {

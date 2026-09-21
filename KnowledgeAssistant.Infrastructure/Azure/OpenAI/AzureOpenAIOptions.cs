@@ -18,9 +18,9 @@ namespace KnowledgeAssistant.Infrastructure.Azure.OpenAI;
 /// </para>
 /// <para>
 /// <b>No API key.</b> Azure OpenAI issues keys; none is used. Authentication is
-/// Entra ID via <c>DefaultAzureCredential</c>, sharing the credential configured
-/// once in <c>Azure:Credential</c>. The data-plane role is
-/// <c>Cognitive Services OpenAI User</c>.
+/// Entra ID, sharing the credential configured once in <c>Azure:Credential</c>.
+/// The data-plane role is <c>Azure AI User</c> on the Foundry account, which
+/// also covers Document Intelligence and the agent.
 /// </para>
 /// <para>
 /// <b>The endpoint is required.</b> Unlike Document Intelligence, which falls
@@ -29,7 +29,7 @@ namespace KnowledgeAssistant.Infrastructure.Azure.OpenAI;
 /// and the process refuses to start.
 /// </para>
 /// </remarks>
-public sealed class AzureOpenAIOptions
+public sealed class AzureOpenAIOptions : IValidatableObject
 {
     /// <summary>The configuration section these options bind from.</summary>
     public const string SectionName = "Azure:AiFoundry";
@@ -71,41 +71,58 @@ public sealed class AzureOpenAIOptions
     [Range(64, 16_384, ErrorMessage = "Azure:AiFoundry:ChatMaxOutputTokens must be between 64 and 16384.")]
     public int ChatMaxOutputTokens { get; init; } = 800;
 
-    /// <summary>The sampling temperature for answers.</summary>
+    /// <summary>
+    /// The sampling temperature for answers, or unset to send none and use the
+    /// model's default.
+    /// </summary>
     /// <remarks>
-    /// Zero by default, which is the right default for grounded question
-    /// answering: the same question over the same corpus should produce the same
-    /// answer, and variation in a factual lookup is noise rather than creativity.
-    /// Raising it makes answers less reproducible without making them better
-    /// grounded.
+    /// <para>
+    /// <b>Unset by default because the chosen model rejects anything else.</b>
+    /// Reasoning deployments such as <c>gpt-5-mini</c> accept only their default
+    /// temperature: a request carrying <c>0</c> was answered
+    /// <c>400 unsupported_value</c> ("Only the default (1) value is supported").
+    /// Omitting the parameter works for every model, so it is the only default
+    /// that does not depend on which deployment is configured.
+    /// </para>
+    /// <para>
+    /// For a non-reasoning deployment, <c>0</c> is the right value for grounded
+    /// question answering: the same question over the same corpus should produce
+    /// the same answer.
+    /// </para>
     /// </remarks>
     [Range(0.0, 2.0, ErrorMessage = "Azure:AiFoundry:ChatTemperature must be between 0.0 and 2.0.")]
-    public double ChatTemperature { get; init; }
+    public double? ChatTemperature { get; init; }
 
     /// <summary>The underlying model behind the embedding deployment.</summary>
     /// <remarks>
-    /// Distinct from <see cref="EmbeddingDeploymentName"/>, and needed because
-    /// Azure AI Search's integrated vectorizer validates the model rather than
-    /// the deployment: it checks that the dimensions an index declares are
-    /// achievable by that model before it will accept the index definition. It is
-    /// unused by embedding generation itself, which addresses the deployment.
+    /// Distinct from <see cref="EmbeddingDeploymentName"/>. Embedding generation
+    /// addresses the deployment; this names what that deployment serves, so that
+    /// <see cref="EmbeddingDimensions"/> can be checked against it at startup.
+    /// The default is the model the verified deployment serves.
     /// </remarks>
     [Required(AllowEmptyStrings = false, ErrorMessage = "Azure:AiFoundry:EmbeddingModelName must be configured.")]
-    public string EmbeddingModelName { get; init; } = "text-embedding-3-small";
+    public string EmbeddingModelName { get; init; } = "text-embedding-3-large";
 
     /// <summary>
-    /// The vector length the deployed model is expected to produce, or 0 to skip
-    /// the check.
+    /// The vector length the deployed model produces, and the dimension the
+    /// retrieval index is created with.
     /// </summary>
     /// <remarks>
-    /// Not a request — this SDK version exposes no way to ask for a dimension
-    /// count — but an assertion. If the deployment is repointed at a different
-    /// model, the vectors silently change length, and every index built from a
-    /// mixture of lengths is unusable. Checking each returned vector converts
-    /// that from a slow, confusing degradation into an immediate, named failure.
+    /// <para>
+    /// Not a request — the application never asks for a reduced dimension — but
+    /// an assertion and a schema input. Each returned vector is checked against
+    /// it, and <c>knowledge-chunks</c> is created with exactly this many
+    /// dimensions. Vector dimensions cannot be changed on an existing index, so
+    /// changing this value means recreating that index and re-ingesting.
+    /// </para>
+    /// <para>
+    /// 3072 is what <c>text-embedding-3-large</c> returns (observed from the live
+    /// deployment). For a known model the startup check below rejects any other
+    /// value, because those vectors would fail every write to the index.
+    /// </para>
     /// </remarks>
-    [Range(0, 16384, ErrorMessage = "Azure:AiFoundry:EmbeddingDimensions must be between 0 and 16384.")]
-    public int EmbeddingDimensions { get; init; } = 1536;
+    [Range(1, 16384, ErrorMessage = "Azure:AiFoundry:EmbeddingDimensions must be between 1 and 16384.")]
+    public int EmbeddingDimensions { get; init; } = 3072;
 
     /// <summary>The number of chunks sent in a single embedding request.</summary>
     /// <remarks>
@@ -142,4 +159,43 @@ public sealed class AzureOpenAIOptions
     /// </remarks>
     [Range(1, 300, ErrorMessage = "Azure:AiFoundry:RetryMaxDelaySeconds must be between 1 and 300.")]
     public double RetryMaxDelaySeconds { get; init; } = 30;
+
+    /// <summary>
+    /// The native output length of embedding models whose size is fixed here,
+    /// because the application requests no reduced dimension.
+    /// </summary>
+    /// <remarks>
+    /// Only models listed here are checked. An unlisted model is accepted with
+    /// whatever dimension is configured, and the per-vector check at run time
+    /// remains the backstop.
+    /// </remarks>
+    internal static readonly IReadOnlyDictionary<string, int> KnownEmbeddingDimensions =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["text-embedding-3-small"] = 1536,
+            ["text-embedding-3-large"] = 3072,
+            ["text-embedding-ada-002"] = 1536,
+        };
+
+    /// <summary>
+    /// Rejects a dimension the configured model cannot produce.
+    /// </summary>
+    /// <remarks>
+    /// Caught at startup rather than on the first upload, where it would surface
+    /// as <c>Embedding.DimensionMismatch</c> after a blob had already been
+    /// written — or as a retrieval index created with the wrong dimension, which
+    /// must be deleted before anything can be ingested.
+    /// </remarks>
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (KnownEmbeddingDimensions.TryGetValue(EmbeddingModelName, out int expected) &&
+            EmbeddingDimensions != expected)
+        {
+            yield return new ValidationResult(
+                $"Azure:AiFoundry:EmbeddingDimensions is {EmbeddingDimensions}, but {EmbeddingModelName} " +
+                $"produces {expected}-dimensional vectors. Set it to {expected}, or correct " +
+                "Azure:AiFoundry:EmbeddingModelName to the model the embedding deployment serves.",
+                [nameof(EmbeddingDimensions), nameof(EmbeddingModelName)]);
+        }
+    }
 }

@@ -56,7 +56,6 @@
     <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Azure.Search.Documents" />
     <PackageReference Include="Azure.AI.DocumentIntelligence" />
-    <PackageReference Include="Azure.AI.OpenAI" />
     <PackageReference Include="Azure.AI.Projects" />
     <PackageReference Include="Azure.AI.Projects.Agents" />
     <PackageReference Include="Azure.AI.Extensions.OpenAI" />

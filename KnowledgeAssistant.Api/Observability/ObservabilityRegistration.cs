@@ -1,5 +1,5 @@
 using System.Reflection;
-using Azure.Identity;
+using Azure.Core;
 using Azure.Monitor.OpenTelemetry.Exporter;
 using KnowledgeAssistant.Application.Diagnostics;
 using KnowledgeAssistant.Infrastructure.Azure.Common;
@@ -53,7 +53,7 @@ internal static class ObservabilityRegistration
             builder.Configuration.GetSection(ObservabilityOptions.SectionName).Get<ObservabilityOptions>()
             ?? new ObservabilityOptions();
 
-        DefaultAzureCredential? credential = ResolveCredential(builder, options);
+        TokenCredential? credential = ResolveCredential(builder, options);
 
         builder.Services
             .AddOpenTelemetry()
@@ -72,7 +72,7 @@ internal static class ObservabilityRegistration
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A second <c>DefaultAzureCredential</c> instance exists in the process: this
+    /// A second credential instance exists in the process: this
     /// one and the one the data-plane clients share. That is deliberate rather
     /// than an oversight. Tokens are cached per resource, and telemetry export
     /// targets <c>monitor.azure.com</c> while storage and search target their own
@@ -86,7 +86,7 @@ internal static class ObservabilityRegistration
     /// while silently failing to export a single trace.
     /// </para>
     /// </remarks>
-    private static DefaultAzureCredential? ResolveCredential(
+    private static TokenCredential? ResolveCredential(
         WebApplicationBuilder builder,
         ObservabilityOptions options)
     {
@@ -99,7 +99,7 @@ internal static class ObservabilityRegistration
             builder.Configuration.GetSection(AzureCredentialOptions.SectionName).Get<AzureCredentialOptions>()
             ?? new AzureCredentialOptions();
 
-        return AzureCredentialFactory.Create(credentialOptions);
+        return AzureCredentialFactory.Create(credentialOptions, builder.Environment);
     }
 
     /// <summary>
@@ -135,7 +135,7 @@ internal static class ObservabilityRegistration
     private static void ConfigureTracing(
         TracerProviderBuilder tracing,
         ObservabilityOptions options,
-        DefaultAzureCredential? credential)
+        TokenCredential? credential)
     {
         if (!options.TracingEnabled)
         {
@@ -200,7 +200,7 @@ internal static class ObservabilityRegistration
     private static void ConfigureMetrics(
         MeterProviderBuilder metrics,
         ObservabilityOptions options,
-        DefaultAzureCredential? credential)
+        TokenCredential? credential)
     {
         if (!options.MetricsEnabled)
         {
@@ -269,7 +269,7 @@ internal static class ObservabilityRegistration
     private static void ConfigureLogging(
         WebApplicationBuilder builder,
         ObservabilityOptions options,
-        DefaultAzureCredential? credential)
+        TokenCredential? credential)
     {
         if (!options.LoggingEnabled)
         {

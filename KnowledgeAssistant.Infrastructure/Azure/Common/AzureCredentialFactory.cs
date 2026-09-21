@@ -1,4 +1,6 @@
+using Azure.Core;
 using Azure.Identity;
+using Microsoft.Extensions.Hosting;
 
 namespace KnowledgeAssistant.Infrastructure.Azure.Common;
 
@@ -27,17 +29,49 @@ namespace KnowledgeAssistant.Infrastructure.Azure.Common;
 public static class AzureCredentialFactory
 {
     /// <summary>
-    /// Creates a <see cref="DefaultAzureCredential"/> from configuration.
+    /// Creates the credential for the given host environment: one explicit
+    /// developer credential in Development, <see cref="DefaultAzureCredential"/>
+    /// everywhere else.
     /// </summary>
     /// <remarks>
-    /// <c>DefaultAzureCredential</c> rather than an explicit credential type so
-    /// the same code path runs everywhere: the chain resolves to the Azure CLI or
-    /// Visual Studio identity on a laptop and to managed identity in Azure. No key
-    /// exists in either environment, so there is none to leak.
+    /// <para>
+    /// <c>DefaultAzureCredential</c> outside Development so the same code path
+    /// runs in every deployed environment and resolves to managed identity in
+    /// Azure. No key exists there, so there is none to leak.
+    /// </para>
+    /// <para>
+    /// <b>Why Development skips the chain.</b> On a laptop the chain was measured
+    /// (Azure.Identity 1.21.0 / Azure.Core 1.60.0) taking 26.8 s in
+    /// <c>ManagedIdentityCredential</c> probing an unreachable IMDS endpoint, then
+    /// failing hard instead of falling through; with managed identity excluded,
+    /// <c>VisualStudioCredential</c> still spent 24 s failing before the Azure CLI
+    /// produced the token. Development therefore uses exactly one credential,
+    /// chosen by <see cref="AzureCredentialOptions.DevelopmentCredential"/>:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><c>AzureCli</c> (default) — the <c>az login</c> on the host, for
+    /// <c>dotnet run</c>.</item>
+    /// <item><c>ManagedIdentity</c> — a <see cref="ManagedIdentityCredential"/>
+    /// with no probing chain, for Docker Compose, where the runtime image has no
+    /// <c>az</c> and a local token endpoint stands in for the platform's
+    /// (see <c>tools/azure-token-proxy</c>). It is the same credential type that
+    /// answers in Azure, which is the point.</item>
+    /// </list>
+    /// <para>
+    /// Outside Development the setting is ignored and the chain is used as-is.
+    /// </para>
     /// </remarks>
-    public static DefaultAzureCredential Create(AzureCredentialOptions options)
+    public static TokenCredential Create(AzureCredentialOptions options, IHostEnvironment environment)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(environment);
+
+        if (environment.IsDevelopment())
+        {
+            return options.DevelopmentCredential == DevelopmentCredential.ManagedIdentity
+                ? new ManagedIdentityCredential(ManagedIdentityId.SystemAssigned)
+                : new AzureCliCredential();
+        }
 
         var credentialOptions = new DefaultAzureCredentialOptions();
 

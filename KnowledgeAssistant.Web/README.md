@@ -105,12 +105,15 @@ change. `shared/api/apiProblem.ts` flattens both into one list.
 
 ## Notes on the dependencies
 
-**React Router is held at the latest v7 despite an open advisory.** `npm audit`
-reports GHSA-qwww-vcr4-c8h2, a CSRF bypass in **RSC mode**. This client uses
-`createBrowserRouter` in data mode and no RSC, so the affected path does not
-exist here. The only version npm proposes as a "fix" is 7.11.0, which carries
-eight advisories that *are* reachable from a SPA — XSS, open redirect, and RCE
-via a vendored `turbo-stream`. Staying current is the safer of the two.
+**React Router is held at the latest v7 (7.18.2), and `npm audit` is clean.**
+It was not always: audit used to report GHSA-qwww-vcr4-c8h2, a CSRF bypass in
+**RSC mode**, which this client cannot reach — it uses `createBrowserRouter` in
+data mode with no RSC. The "fix" npm proposed at the time was 7.11.0, which
+carries eight advisories that *are* reachable from a SPA: XSS, open redirect,
+and RCE via a vendored `turbo-stream`. The note is kept because the reasoning
+outlives the advisory: an audit finding is a question about reachability, not
+an instruction, and downgrading into eight reachable holes to close one
+unreachable one is the wrong trade.
 
 **Icons are Lucide, not Fluent.** `docs/DESIGN.md` §10 specifies Fluent UI
 System Icons for their Azure lineage; Lucide was set as a stack requirement

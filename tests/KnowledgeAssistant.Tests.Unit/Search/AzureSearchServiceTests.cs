@@ -386,6 +386,165 @@ public sealed class AzureSearchServiceTests
         result.Error.Should().Be(SearchErrors.SearchFailed);
     }
 
+    // ---- ListDocumentsAsync: the corpus listing ----------------------------
+
+    private static SearchResult<IndexedDocument> DocumentHit(
+        Guid? documentId = null,
+        string fileName = "handbook.pdf",
+        string blobName = "2026/08/01/handbook.pdf",
+        string blobUri = "https://acct.blob.core.windows.net/documents/2026/08/01/handbook.pdf",
+        string? rawDocumentId = null,
+        DateTimeOffset? uploadedAt = null) =>
+        SearchModelFactory.SearchResult(
+            new IndexedDocument
+            {
+                DocumentId = rawDocumentId ?? (documentId ?? Guid.CreateVersion7()).ToString(),
+                OriginalFileName = fileName,
+                BlobName = blobName,
+                BlobUri = blobUri,
+                UploadedAt = uploadedAt ?? new DateTimeOffset(2026, 8, 1, 12, 30, 0, TimeSpan.Zero),
+            },
+            score: null,
+            highlights: null);
+
+    [Fact]
+    public async Task ListDocuments_QueriesTheDocumentIndexNewestFirst()
+    {
+        using Rig rig = CreateRig();
+
+        await rig.Service.ListDocumentsAsync(maxResults: 25, CancellationToken.None);
+
+        rig.ChunkClient.SearchCallCount.Should().Be(0, "a corpus listing has no business in the chunk index");
+        rig.DocumentClient.SearchCallCount.Should().Be(1);
+        rig.DocumentClient.LastSearchText.Should().Be("*", "a listing matches everything rather than scoring a query");
+
+        SearchOptions options = rig.DocumentClient.LastSearchOptions.Should().NotBeNull().And.Subject
+            .Should().BeOfType<SearchOptions>().Subject;
+
+        options.Size.Should().Be(25);
+        options.OrderBy.Should().Equal("UploadedAt desc");
+        options.Select.Should().Equal("DocumentId", "OriginalFileName", "BlobName", "BlobUri", "UploadedAt");
+        options.VectorSearch.Should().BeNull("this is a listing, not a vector query");
+    }
+
+    [Fact]
+    public async Task ListDocuments_MapsEveryFieldOntoThePortsReadModel()
+    {
+        using Rig rig = CreateRig();
+        var documentId = Guid.CreateVersion7();
+        var uploadedAt = new DateTimeOffset(2026, 9, 19, 8, 15, 0, TimeSpan.Zero);
+        rig.DocumentClient.SearchHits.Add(DocumentHit(
+            documentId,
+            fileName: "rapor-şubat.pdf",
+            blobName: "2026/09/19/rapor.pdf",
+            blobUri: "https://acct.blob.core.windows.net/documents/2026/09/19/rapor.pdf",
+            uploadedAt: uploadedAt));
+
+        Result<IReadOnlyList<DocumentIndexEntry>> result =
+            await rig.Service.ListDocumentsAsync(maxResults: 25, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+
+        DocumentIndexEntry entry = result.Value.Should().ContainSingle().Subject;
+        entry.DocumentId.Should().Be(documentId);
+        entry.OriginalFileName.Should().Be("rapor-şubat.pdf");
+        entry.BlobName.Should().Be("2026/09/19/rapor.pdf");
+        entry.BlobUri.Should().Be(new Uri("https://acct.blob.core.windows.net/documents/2026/09/19/rapor.pdf"));
+        entry.UploadedAt.Should().Be(uploadedAt);
+    }
+
+    [Theory]
+    [InlineData("not-a-guid", "https://acct.blob.core.windows.net/documents/doc.pdf", "key")]
+    [InlineData(null, "not-a-uri", "blob URI")]
+    public async Task ListDocuments_SkipsARecordItCannotIdentify(string? rawId, string blobUri, string what)
+    {
+        // Same rule as retrieval: a row that resolves to nothing is worse on a
+        // screen than one row fewer, and the whole listing is still useful.
+        using Rig rig = CreateRig();
+        rig.DocumentClient.SearchHits.Add(DocumentHit(fileName: "first.pdf"));
+        rig.DocumentClient.SearchHits.Add(DocumentHit(rawDocumentId: rawId, blobUri: blobUri, fileName: "broken.pdf"));
+        rig.DocumentClient.SearchHits.Add(DocumentHit(fileName: "third.pdf"));
+
+        Result<IReadOnlyList<DocumentIndexEntry>> result =
+            await rig.Service.ListDocumentsAsync(maxResults: 25, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue($"a malformed {what} is skipped, not treated as a failed listing");
+        result.Value.Select(entry => entry.OriginalFileName).Should().Equal("first.pdf", "third.pdf");
+    }
+
+    [Fact]
+    public async Task ListDocuments_WhenTheDocumentIndexDoesNotExist_ReportsAnEmptyCorpus()
+    {
+        // The index is created by the first ingestion, so 404 means nothing has
+        // been uploaded — an empty list, not a failure the caller must decode.
+        using Rig rig = CreateRig();
+        rig.DocumentClient.ThrowNext = new RequestFailedException(404, "index not found");
+
+        Result<IReadOnlyList<DocumentIndexEntry>> result =
+            await rig.Service.ListDocumentsAsync(maxResults: 25, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(400)]
+    [InlineData(403)]
+    [InlineData(429)]
+    [InlineData(503)]
+    public async Task ListDocuments_WhenTheServiceRejectsTheQuery_ReportsSearchFailed(int status)
+    {
+        using Rig rig = CreateRig();
+        rig.DocumentClient.ThrowNext = new RequestFailedException(status, "rejected");
+
+        Result<IReadOnlyList<DocumentIndexEntry>> result =
+            await rig.Service.ListDocumentsAsync(maxResults: 25, CancellationToken.None);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Be(SearchErrors.SearchFailed);
+    }
+
+    [Fact]
+    public async Task ListDocuments_WhenNoCredentialCanBeObtained_ReportsAuthenticationFailed()
+    {
+        using Rig rig = CreateRig();
+        rig.DocumentClient.ThrowNext = new AuthenticationFailedException("no credential in the chain succeeded");
+
+        Result<IReadOnlyList<DocumentIndexEntry>> result =
+            await rig.Service.ListDocumentsAsync(maxResults: 25, CancellationToken.None);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Be(SearchErrors.AuthenticationFailed);
+    }
+
+    [Fact]
+    public async Task ListDocuments_WhenRetriesAreExhaustedAtTheTransportLevel_ReportsSearchFailed()
+    {
+        using Rig rig = CreateRig();
+        rig.DocumentClient.ThrowNext = new AggregateException(new HttpRequestException("connection refused"));
+
+        Result<IReadOnlyList<DocumentIndexEntry>> result =
+            await rig.Service.ListDocumentsAsync(maxResults: 25, CancellationToken.None);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Be(SearchErrors.SearchFailed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task ListDocuments_RejectsANonPositiveLimitBeforeCallingTheService(int maxResults)
+    {
+        // A programming error, not a caller's mistake: the query's validator
+        // bounds what reaches here, so this guards the port's own contract.
+        using Rig rig = CreateRig();
+
+        Func<Task> act = () => rig.Service.ListDocumentsAsync(maxResults, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        rig.DocumentClient.SearchCallCount.Should().Be(0);
+    }
+
     // ---- IndexDocumentAsync: the write -------------------------------------
 
     [Fact]

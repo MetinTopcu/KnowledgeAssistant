@@ -17,10 +17,11 @@ namespace KnowledgeAssistant.Infrastructure.Azure.Agents;
 /// and only what is genuinely agent-specific lives here.
 /// </para>
 /// <para>
-/// <b>Nothing here is required.</b> Every value has a working default, so adding
-/// the agent does not add a setting a deployment must discover. That is a
-/// deliberate contrast with the endpoint and deployment names, which have no
-/// sensible default and correctly fail the process at startup when absent.
+/// <b>Two values are required.</b> <see cref="ProjectEndpoint"/> always, because
+/// agents exist only inside a project and no other endpoint serves them; and
+/// <see cref="Version"/> outside Development, where the agent must be pinned
+/// (enforced by <c>FoundryAgentOptionsValidator</c>, which needs the host
+/// environment). Everything else has a working default.
 /// </para>
 /// <para>
 /// <b>No API key, as everywhere else.</b> Authentication is Entra ID via
@@ -36,25 +37,24 @@ public sealed class FoundryAgentOptions : IValidatableObject
     public const string SectionName = "Azure:AiFoundry:Agent";
 
     /// <summary>
-    /// The Foundry <em>project</em> endpoint, or empty to reuse
-    /// <c>Azure:AiFoundry:Endpoint</c>.
+    /// The Foundry <em>project</em> endpoint, for example
+    /// <c>https://contoso.services.ai.azure.com/api/projects/my-project</c>.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>These are frequently not the same URL, which is the reason this setting
-    /// exists.</b> The OpenAI-compatible surface that serves chat and embeddings is
-    /// addressed at the account — <c>https://contoso.services.ai.azure.com/</c> —
-    /// while agents belong to a project inside that account and are addressed at
-    /// <c>https://contoso.services.ai.azure.com/api/projects/my-project</c>. An
-    /// account with exactly one project often answers on both, which is precisely
-    /// what makes the difference easy to miss until a second project appears.
-    /// </para>
-    /// <para>
-    /// Defaulting to the parent endpoint keeps the single-project case free of
-    /// another setting. Set it explicitly when the account hosts more than one
-    /// project, or the agent resolves against whichever one Azure picks.
+    /// <b>Required, and never the account endpoint.</b> The OpenAI-compatible
+    /// surface that serves chat and embeddings is addressed at the account —
+    /// <c>https://contoso.services.ai.azure.com/</c> — while agents belong to a
+    /// project inside that account. Against a live account with exactly one
+    /// project, the account endpoint answered 404 to every agent call, so there
+    /// is no fallback: an empty value, or one without an
+    /// <c>/api/projects/&lt;name&gt;</c> path, fails at startup instead of on the
+    /// first question.
     /// </para>
     /// </remarks>
+    [Required(AllowEmptyStrings = false, ErrorMessage =
+        "Azure:AiFoundry:Agent:ProjectEndpoint must be configured: the Foundry project endpoint, " +
+        "https://<account>.services.ai.azure.com/api/projects/<project>.")]
     public string ProjectEndpoint { get; init; } = string.Empty;
 
     /// <summary>The agent's name within the Foundry project.</summary>
@@ -67,20 +67,27 @@ public sealed class FoundryAgentOptions : IValidatableObject
     public string Name { get; init; } = "knowledge-assistant";
 
     /// <summary>
-    /// A specific agent version to use, or empty to resolve one at first use.
+    /// The agent version this deployment answers with.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Set this in production.</b> Pinning makes the agent's instructions and
-    /// tool schema part of the deployment rather than something the running
+    /// <b>Required outside Development.</b> Pinning makes the agent's instructions
+    /// and tool schema part of the deployment rather than something the running
     /// process decides, so a change to either is reviewed and rolled out like any
-    /// other change. It also removes the write permission the alternative needs.
+    /// other change. It also removes the write permission provisioning needs.
     /// </para>
     /// <para>
-    /// Left empty, the adapter provisions on first use: it looks for an existing
-    /// version whose definition matches, and creates one only when none does. That
-    /// is what makes the service usable from a clean project without a separate
-    /// provisioning step.
+    /// <b>A pinned version is checked, not trusted.</b> On first use the adapter
+    /// reads that version and compares its stored definition fingerprint with the
+    /// one this build computes. A mismatch — different instructions, tool schema,
+    /// model deployment, or temperature — fails with a log naming both
+    /// fingerprints, because the agent would otherwise run a definition this
+    /// code was not written against.
+    /// </para>
+    /// <para>
+    /// Left empty (Development only), the adapter provisions on first use: it
+    /// reuses a version whose fingerprint matches, and creates one only when none
+    /// does. The version it settles on is logged; that is the value to pin.
     /// </para>
     /// </remarks>
     public string Version { get; init; } = string.Empty;
@@ -101,16 +108,20 @@ public sealed class FoundryAgentOptions : IValidatableObject
     /// </remarks>
     public string ModelDeploymentName { get; init; } = string.Empty;
 
-    /// <summary>The sampling temperature the agent answers at.</summary>
+    /// <summary>
+    /// The sampling temperature the agent answers at, or unset to leave it out
+    /// of the agent definition and use the model's default.
+    /// </summary>
     /// <remarks>
-    /// Zero for the same reason the chat deployment uses zero: a grounded answer
-    /// should be reproducible, and sampling variation in a factual lookup is noise
-    /// rather than creativity. It matters more here — temperature also perturbs
-    /// the agent's decision about <i>what to search for</i>, so raising it makes
-    /// the retrieval itself non-reproducible, not just the wording.
+    /// Unset by default for the reason <c>Azure:AiFoundry:ChatTemperature</c> is:
+    /// reasoning models such as <c>gpt-5-mini</c> reject any value but their
+    /// default. With a non-reasoning model, <c>0</c> is preferable — temperature
+    /// also perturbs the agent's decision about <i>what to search for</i>, so
+    /// raising it makes the retrieval itself non-reproducible. Part of the
+    /// definition fingerprint: changing it requires a new pinned version.
     /// </remarks>
     [Range(0.0, 2.0, ErrorMessage = "Azure:AiFoundry:Agent:Temperature must be between 0.0 and 2.0.")]
-    public double Temperature { get; init; }
+    public double? Temperature { get; init; }
 
     /// <summary>
     /// The most rounds of tool calls permitted before the agent is stopped.
@@ -148,25 +159,54 @@ public sealed class FoundryAgentOptions : IValidatableObject
     public int MaxSearchResultCharacters { get; init; } = 24_000;
 
     /// <summary>
-    /// Validates the project endpoint only when one has been supplied.
+    /// Validates that the project endpoint addresses a project.
     /// </summary>
     /// <remarks>
-    /// A conditional rule, so it cannot be an attribute — the same arrangement
-    /// <see cref="DocumentIntelligence.DocumentIntelligenceOptions"/> uses, and for
-    /// the same reason. <c>[Url]</c> rejects the empty string, which here
-    /// legitimately means "use the parent AI Foundry endpoint", so the attribute
-    /// would fail every deployment that did not need this setting. Omitting the
-    /// check entirely is worse: a typo would bind silently and surface as an agent
-    /// that cannot be resolved, on the first question, in production.
+    /// Emptiness is left to <c>[Required]</c>, so a missing value reports once.
+    /// The shape check is what catches the account endpoint pasted where the
+    /// project endpoint belongs — the mistake that produced a 404 on every agent
+    /// call rather than a startup error.
     /// </remarks>
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
-        if (!string.IsNullOrWhiteSpace(ProjectEndpoint) &&
-            !Uri.TryCreate(ProjectEndpoint, UriKind.Absolute, out _))
+        if (string.IsNullOrWhiteSpace(ProjectEndpoint))
+        {
+            yield break;
+        }
+
+        if (!TryGetProjectName(ProjectEndpoint, out _))
         {
             yield return new ValidationResult(
-                "Azure:AiFoundry:Agent:ProjectEndpoint must be an absolute URL when it is set.",
+                "Azure:AiFoundry:Agent:ProjectEndpoint must be an absolute https URL of the form " +
+                "https://<account>.services.ai.azure.com/api/projects/<project>; the account endpoint " +
+                "does not serve agents.",
                 [nameof(ProjectEndpoint)]);
         }
+    }
+
+    /// <summary>
+    /// Extracts the project name from a project endpoint.
+    /// </summary>
+    internal static bool TryGetProjectName(string endpoint, out string projectName)
+    {
+        projectName = string.Empty;
+
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string[] segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        if (segments.Length != 3 ||
+            !string.Equals(segments[0], "api", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(segments[1], "projects", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        projectName = segments[2];
+        return true;
     }
 }

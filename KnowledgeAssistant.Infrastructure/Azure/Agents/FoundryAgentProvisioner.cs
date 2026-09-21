@@ -119,13 +119,13 @@ internal sealed partial class FoundryAgentProvisioner : IDisposable
     /// <summary>
     /// Returns the agent version to run, resolving it on the first call.
     /// </summary>
+    /// <remarks>
+    /// A pinned version goes through the same once-per-process gate: it is
+    /// verified against this build's definition before it is first used, rather
+    /// than trusted because configuration named it.
+    /// </remarks>
     internal async Task<Result<string>> ResolveVersionAsync(CancellationToken cancellationToken)
     {
-        if (_options.IsVersionPinned)
-        {
-            return _options.Version;
-        }
-
         string? resolved = _resolvedVersion;
 
         if (resolved is not null)
@@ -162,13 +162,20 @@ internal sealed partial class FoundryAgentProvisioner : IDisposable
         }
     }
 
-    /// <summary>Finds a matching version or creates one.</summary>
+    /// <summary>
+    /// Verifies the pinned version, or finds a matching version or creates one.
+    /// </summary>
     private async Task<Result<string>> ResolveCoreAsync(CancellationToken cancellationToken)
     {
         string fingerprint = DefinitionFingerprint;
 
         try
         {
+            if (_options.IsVersionPinned)
+            {
+                return await VerifyPinnedVersionAsync(fingerprint, cancellationToken).ConfigureAwait(false);
+            }
+
             string? existing = await FindMatchingVersionAsync(fingerprint, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -252,6 +259,66 @@ internal sealed partial class FoundryAgentProvisioner : IDisposable
         }
     }
 
+    /// <summary>
+    /// Confirms the pinned version exists and carries this build's definition.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The agent runs the model, instructions, and tool schema stored in its
+    /// version, not those in this process's configuration. A pinned version made
+    /// from a different definition would therefore answer with a tool contract or
+    /// model this code was not written against — silently, because every call
+    /// would still succeed. Comparing fingerprints turns that into a named
+    /// failure on the first question.
+    /// </para>
+    /// <para>
+    /// Only a read: verification needs no write role, which is the point of
+    /// pinning. Failures are not cached, so a corrected configuration takes
+    /// effect on the next restart without anything to clear.
+    /// </para>
+    /// </remarks>
+    private async Task<Result<string>> VerifyPinnedVersionAsync(
+        string fingerprint,
+        CancellationToken cancellationToken)
+    {
+        ProjectsAgentVersion pinned;
+
+        try
+        {
+            pinned = await _resiliencePipeline.ExecuteAsync(
+                async token =>
+                {
+                    ClientResult<ProjectsAgentVersion> result = await _administrationClient
+                        .GetAgentVersionAsync(_options.Name, _options.Version, token)
+                        .ConfigureAwait(false);
+
+                    return result.Value;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (ClientResultException exception) when (exception.Status == 404)
+        {
+            LogPinnedVersionNotFound(exception, _options.Name, _options.Version);
+            return Result.Failure<string>(AgentErrors.ProvisioningFailed);
+        }
+
+        string? stored = null;
+
+        if (pinned.Metadata is not null)
+        {
+            pinned.Metadata.TryGetValue(FingerprintKey, out stored);
+        }
+
+        if (!string.Equals(stored, fingerprint, StringComparison.Ordinal))
+        {
+            LogPinnedVersionMismatch(_options.Name, _options.Version, stored ?? "(none)", fingerprint);
+            return Result.Failure<string>(AgentErrors.ProvisioningFailed);
+        }
+
+        LogPinnedVersionVerified(_options.Name, _options.Version, fingerprint);
+        return _options.Version;
+    }
+
     /// <summary>Creates a version carrying this build's definition.</summary>
     /// <remarks>
     /// <para>
@@ -273,7 +340,9 @@ internal sealed partial class FoundryAgentProvisioner : IDisposable
         var definition = new DeclarativeAgentDefinition(_modelDeploymentName)
         {
             Instructions = AgentInstructions.SystemPrompt,
-            Temperature = (float)_options.Temperature,
+            // Null leaves temperature out of the definition, so the model's
+            // default applies; reasoning models accept nothing else.
+            Temperature = (float?)_options.Temperature,
         };
 
         definition.Tools.Add(KnowledgeSearchTool.CreateDefinition());
@@ -309,7 +378,7 @@ internal sealed partial class FoundryAgentProvisioner : IDisposable
     private static string Fingerprint(
         string model,
         string instructions,
-        double temperature,
+        double? temperature,
         string functionName,
         string functionDescription,
         string parameterSchema)
@@ -317,7 +386,9 @@ internal sealed partial class FoundryAgentProvisioner : IDisposable
         string material = string.Join(
             '\n',
             model,
-            temperature.ToString("R", CultureInfo.InvariantCulture),
+
+            // "default" cannot collide with a formatted number.
+            temperature?.ToString("R", CultureInfo.InvariantCulture) ?? "default",
             functionName,
             parameterSchema,
             functionDescription,
@@ -354,8 +425,9 @@ internal sealed partial class FoundryAgentProvisioner : IDisposable
         EventId = 5313,
         Level = LogLevel.Error,
         Message = "Could not resolve Foundry agent '{AgentName}': the project returned status {Status}. " +
-                  "Verify the managed identity holds Azure AI Project Manager on the project, or pin an " +
-                  "existing version in Azure:AiFoundry:Agent:Version.")]
+                  "A 404 usually means Azure:AiFoundry:Agent:ProjectEndpoint is not a project endpoint " +
+                  "(.../api/projects/<name>); a 401 or 403 means the identity lacks Azure AI Project Manager " +
+                  "on the project, or pin an existing version in Azure:AiFoundry:Agent:Version.")]
     private partial void LogProvisioningFailed(Exception exception, string agentName, int status);
 
     [LoggerMessage(
@@ -375,4 +447,29 @@ internal sealed partial class FoundryAgentProvisioner : IDisposable
         Level = LogLevel.Error,
         Message = "Azure AI Foundry was unreachable while resolving agent '{AgentName}'.")]
     private partial void LogProvisioningUnreachable(Exception exception, string agentName);
+
+    [LoggerMessage(
+        EventId = 5317,
+        Level = LogLevel.Information,
+        Message = "Using pinned Foundry agent '{AgentName}' version {AgentVersion}; its definition matches this build ({Fingerprint}).")]
+    private partial void LogPinnedVersionVerified(string agentName, string agentVersion, string fingerprint);
+
+    [LoggerMessage(
+        EventId = 5318,
+        Level = LogLevel.Error,
+        Message = "Pinned Foundry agent '{AgentName}' version {AgentVersion} does not exist in the project. " +
+                  "Check Azure:AiFoundry:Agent:Version and Azure:AiFoundry:Agent:ProjectEndpoint.")]
+    private partial void LogPinnedVersionNotFound(Exception exception, string agentName, string agentVersion);
+
+    [LoggerMessage(
+        EventId = 5319,
+        Level = LogLevel.Error,
+        Message = "Pinned Foundry agent '{AgentName}' version {AgentVersion} was created from definition {StoredFingerprint}, " +
+                  "but this build defines {ExpectedFingerprint}. The instructions, tool schema, model deployment, or " +
+                  "temperature differ. Provision a matching version in Development and pin that one.")]
+    private partial void LogPinnedVersionMismatch(
+        string agentName,
+        string agentVersion,
+        string storedFingerprint,
+        string expectedFingerprint);
 }

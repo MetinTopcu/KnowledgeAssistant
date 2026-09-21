@@ -68,11 +68,11 @@ public sealed class AzureSearchOptions
     /// <remarks>
     /// <para>
     /// Azure caps a batch at 1000 documents, but that is not the limit that
-    /// binds here — the 16 MB request ceiling is. A 1536-dimension vector
-    /// serialises to roughly 20 KB of JSON, so a thousand chunks would be about
-    /// 20 MB and be rejected outright. A hundred keeps a batch near 2 MB with
-    /// room for text, which is why the default is well under the documented
-    /// maximum.
+    /// binds here — the 16 MB request ceiling is. A 3072-dimension vector
+    /// (text-embedding-3-large) serialises to roughly 40 KB of JSON, so a
+    /// thousand chunks would be about 40 MB and be rejected outright. A hundred
+    /// keeps a batch near 4 MB with room for text, which is why the default is
+    /// well under the documented maximum.
     /// </para>
     /// </remarks>
     [Range(1, 1000, ErrorMessage = "Azure:Search:IndexingBatchSize must be between 1 and 1000.")]
@@ -108,16 +108,19 @@ public sealed class AzureSearchOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Nothing in this slice uses it — there are no queries — but a vectorizer
-    /// cannot be added to an index after creation, so the decision has to be made
-    /// now or paid for with a rebuild later.
+    /// <b>Off by design, not used</b> — <c>false</c> when the key is absent.
+    /// The application embeds every query itself through
+    /// <c>IEmbeddingService</c> and submits a <c>VectorizedQuery</c>, so
+    /// query and corpus vectors always come from the same configured model. A
+    /// service-side vectorizer would be a second, independently configured path
+    /// to the same result.
     /// </para>
     /// <para>
-    /// <b>It runs as the search service's own identity, not this
-    /// application's.</b> Enabling it here declares the intent; the search
-    /// service still needs its own <c>Cognitive Services OpenAI User</c>
-    /// assignment on the AI Foundry resource before a query can use it.
+    /// Leaving it off also means the search service needs no managed identity
+    /// and no role on the AI Foundry resource. Were it ever enabled, that call
+    /// runs as the <i>search service's</i> identity, not this application's, and
+    /// a vectorizer cannot be added to an existing index without a rebuild.
     /// </para>
     /// </remarks>
-    public bool EnableVectorizer { get; init; } = true;
+    public bool EnableVectorizer { get; init; }
 }

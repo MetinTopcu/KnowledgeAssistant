@@ -245,6 +245,112 @@ internal sealed partial class AzureSearchService : IAzureSearchService, IDisposa
         }
     }
 
+    /// <inheritdoc />
+    public async Task<Result<IReadOnlyList<DocumentIndexEntry>>> ListDocumentsAsync(
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResults);
+
+        var searchOptions = new SearchOptions
+        {
+            Size = maxResults,
+
+            // Newest first. The field is sortable in the schema, so this is the
+            // service's ordering rather than a sort applied to an arbitrary page
+            // — the difference matters as soon as the corpus outgrows one page.
+            OrderBy = { $"{nameof(SearchDocument.UploadedAt)} desc" },
+
+            // Named explicitly, so adding a field to the index does not quietly
+            // start inflating this response.
+            Select =
+            {
+                nameof(SearchDocument.DocumentId),
+                nameof(SearchDocument.OriginalFileName),
+                nameof(SearchDocument.BlobName),
+                nameof(SearchDocument.BlobUri),
+                nameof(SearchDocument.UploadedAt),
+            },
+        };
+
+        try
+        {
+            // "*" matches everything. This is a listing, not a search: there is
+            // no query text to score by, and the order comes from OrderBy above.
+            Response<SearchResults<SearchDocument>> response = await _searchClient
+                .SearchAsync<SearchDocument>("*", searchOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            var documents = new List<DocumentIndexEntry>(maxResults);
+
+            await foreach (SearchResult<SearchDocument> hit in
+                response.Value.GetResultsAsync().WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                DocumentIndexEntry? mapped = MapDocument(hit.Document);
+
+                if (mapped is not null)
+                {
+                    documents.Add(mapped);
+                }
+            }
+
+            LogDocumentsListed(documents.Count, maxResults, _indexName);
+
+            return documents;
+        }
+        catch (RequestFailedException exception) when (exception.Status == 404)
+        {
+            // The index is created by the first ingestion, so its absence means
+            // an empty corpus rather than a broken one. An empty list is the
+            // truthful answer to "what has been uploaded?" and spares every
+            // caller from decoding an error to learn that nothing is wrong.
+            LogDocumentIndexMissing(_indexName);
+            return Array.Empty<DocumentIndexEntry>();
+        }
+        catch (RequestFailedException exception)
+        {
+            LogSearchFailed(exception, _indexName, exception.Status, exception.ErrorCode);
+            return Result.Failure<IReadOnlyList<DocumentIndexEntry>>(SearchErrors.SearchFailed);
+        }
+        catch (AuthenticationFailedException exception)
+        {
+            LogAuthenticationFailed(exception);
+            return Result.Failure<IReadOnlyList<DocumentIndexEntry>>(SearchErrors.AuthenticationFailed);
+        }
+        catch (AggregateException exception)
+        {
+            LogTransportFailed(exception, _indexName);
+            return Result.Failure<IReadOnlyList<DocumentIndexEntry>>(SearchErrors.SearchFailed);
+        }
+    }
+
+    /// <summary>
+    /// Maps one indexed record onto the port's vendor-neutral read model.
+    /// </summary>
+    /// <remarks>
+    /// Returns <see langword="null"/> for a record whose key or blob URI cannot be
+    /// parsed, for the same reason <see cref="MapHit"/> does: a document that
+    /// cannot be identified cannot be acted on, and listing it would put a row on
+    /// screen that resolves to nothing. It should be unreachable — this index is
+    /// only ever written by <see cref="IndexDocumentAsync"/>.
+    /// </remarks>
+    private DocumentIndexEntry? MapDocument(SearchDocument document)
+    {
+        if (!Guid.TryParse(document.DocumentId, out Guid documentId) ||
+            !Uri.TryCreate(document.BlobUri, UriKind.Absolute, out Uri? blobUri))
+        {
+            LogUnmappableDocument(document.DocumentId ?? "(null)");
+            return null;
+        }
+
+        return new DocumentIndexEntry(
+            DocumentId: documentId,
+            OriginalFileName: document.OriginalFileName,
+            BlobName: document.BlobName,
+            BlobUri: blobUri,
+            UploadedAt: document.UploadedAt);
+    }
+
     /// <summary>
     /// Maps one hit onto the port's vendor-neutral result.
     /// </summary>
@@ -432,4 +538,22 @@ internal sealed partial class AzureSearchService : IAzureSearchService, IDisposa
         Level = LogLevel.Error,
         Message = "Dropped a search hit whose identifiers could not be parsed: chunk key {ChunkKey}.")]
     private partial void LogUnmappableHit(string chunkKey);
+
+    [LoggerMessage(
+        EventId = 2012,
+        Level = LogLevel.Debug,
+        Message = "Listed {ResultCount} of at most {MaxResults} documents from {IndexName}.")]
+    private partial void LogDocumentsListed(int resultCount, int maxResults, string indexName);
+
+    [LoggerMessage(
+        EventId = 2013,
+        Level = LogLevel.Information,
+        Message = "Document index {IndexName} does not exist yet; reporting an empty corpus.")]
+    private partial void LogDocumentIndexMissing(string indexName);
+
+    [LoggerMessage(
+        EventId = 2014,
+        Level = LogLevel.Error,
+        Message = "Dropped an indexed document whose key or blob URI could not be parsed: key {DocumentKey}.")]
+    private partial void LogUnmappableDocument(string documentKey);
 }

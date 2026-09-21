@@ -1,9 +1,7 @@
 using System.ClientModel.Primitives;
 using Azure.AI.DocumentIntelligence;
-using Azure.AI.OpenAI;
 using Azure.Core;
 using Azure.Core.Extensions;
-using Azure.Identity;
 using Azure.Search.Documents;
 using Azure.Storage.Blobs;
 using Azure.Search.Documents.Indexes;
@@ -22,8 +20,10 @@ using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OpenAI;
 
 namespace KnowledgeAssistant.Infrastructure.DependencyInjection;
 
@@ -42,12 +42,19 @@ public static class InfrastructureServiceRegistration
     /// Registers the Azure clients and the adapters that satisfy the
     /// Application layer's ports.
     /// </summary>
+    /// <remarks>
+    /// The host environment is a parameter, not a service resolved later,
+    /// because the credential is built here, before the container exists, and
+    /// which credential to build depends on it.
+    /// </remarks>
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(environment);
 
         services.AddAzureCredential(configuration);
 
@@ -58,7 +65,7 @@ public static class InfrastructureServiceRegistration
             configuration.GetSection(AzureCredentialOptions.SectionName).Get<AzureCredentialOptions>()
             ?? new AzureCredentialOptions();
 
-        DefaultAzureCredential credential = AzureCredentialFactory.Create(credentialOptions);
+        TokenCredential credential = AzureCredentialFactory.Create(credentialOptions, environment);
 
         services.AddBlobStorage(configuration, credential);
         services.AddAzureSearch(configuration, credential);
@@ -91,7 +98,7 @@ public static class InfrastructureServiceRegistration
     private static IServiceCollection AddBlobStorage(
         this IServiceCollection services,
         IConfiguration configuration,
-        DefaultAzureCredential credential)
+        TokenCredential credential)
     {
         // ValidateOnStart is the point of this block. Without it, a missing
         // ServiceUri surfaces as a NullReferenceException on the first upload —
@@ -150,10 +157,10 @@ public static class InfrastructureServiceRegistration
                     clientOptions.Retry.NetworkTimeout = TimeSpan.FromSeconds(60);
                 });
 
-            // One credential for every Azure client registered here. The chain
-            // resolves to the developer's own identity locally (Azure CLI,
-            // Visual Studio) and to the managed identity in Azure — so the same
-            // code path runs in both, and no key ever exists to be leaked.
+            // One credential for every Azure client registered here: the
+            // managed identity in Azure, the developer's own identity in
+            // Development (see AzureCredentialFactory). No key ever exists to be
+            // leaked.
             clientBuilder.UseCredential(credential);
         });
 
@@ -170,7 +177,7 @@ public static class InfrastructureServiceRegistration
     private static IServiceCollection AddAzureSearch(
         this IServiceCollection services,
         IConfiguration configuration,
-        DefaultAzureCredential credential)
+        TokenCredential credential)
     {
         // Same contract as blob storage: a missing endpoint fails the deployment
         // at startup with a message naming the setting, rather than surfacing as
@@ -257,7 +264,7 @@ public static class InfrastructureServiceRegistration
     private static IServiceCollection AddDocumentChunking(
         this IServiceCollection services,
         IConfiguration configuration,
-        DefaultAzureCredential credential)
+        TokenCredential credential)
     {
         services
             .AddOptions<ChunkingOptions>()
@@ -314,17 +321,30 @@ public static class InfrastructureServiceRegistration
     }
 
     /// <summary>
-    /// Registers the Azure OpenAI client and the embedding adapter.
+    /// Registers the OpenAI client for the Foundry resource and the embedding
+    /// and chat adapters.
     /// </summary>
     /// <remarks>
     /// <para>
+    /// <b>The OpenAI library against Azure's <c>/openai/v1/</c> endpoint, not
+    /// <c>Azure.AI.OpenAI</c>.</b> <c>Azure.AI.OpenAI</c> 2.1.0 — its only GA
+    /// release — is compiled against <c>OpenAI</c> 2.1.0, while the Foundry agent
+    /// packages require <c>OpenAI</c> 2.9.1. Restore picks 2.9.1 and the build is
+    /// clean, but every chat call then fails at run time with
+    /// <c>MissingMethodException</c> for
+    /// <c>ChatCompletionOptions.get_SerializedAdditionalRawData</c>, a member 2.9.1
+    /// no longer has (observed against a live deployment; embeddings, which pass
+    /// no options, were unaffected). The v1 endpoint speaks the OpenAI wire
+    /// protocol with Entra ID auth, so the one <c>OpenAI</c> version the graph
+    /// already needs serves it directly and no second SDK layer can drift.
+    /// </para>
+    /// <para>
     /// <b>Registered by hand rather than through <c>AddAzureClients</c>.</b>
-    /// <see cref="AzureOpenAIClient"/> is built on System.ClientModel, not
-    /// Azure.Core: its options derive from <see cref="ClientPipelineOptions"/>
-    /// rather than <c>Azure.Core.ClientOptions</c>, so the
-    /// <c>Microsoft.Extensions.Azure</c> factory cannot construct it. Two
-    /// singletons are all that is needed, and the shared credential is passed
-    /// explicitly, so the outcome is the same.
+    /// <see cref="OpenAIClient"/> is built on System.ClientModel, not Azure.Core:
+    /// its options derive from <see cref="ClientPipelineOptions"/> rather than
+    /// <c>Azure.Core.ClientOptions</c>, so the <c>Microsoft.Extensions.Azure</c>
+    /// factory cannot construct it. The shared credential is passed explicitly
+    /// through a bearer-token policy, so the outcome is the same.
     /// </para>
     /// <para>
     /// <b>The SDK's own retry is switched off here</b>, and this is the reason to
@@ -340,7 +360,7 @@ public static class InfrastructureServiceRegistration
     private static IServiceCollection AddEmbeddings(
         this IServiceCollection services,
         IConfiguration configuration,
-        DefaultAzureCredential credential)
+        TokenCredential credential)
     {
         services
             .AddOptions<AzureOpenAIOptions>()
@@ -354,8 +374,10 @@ public static class InfrastructureServiceRegistration
 
         services.AddSingleton(_ =>
         {
-            var clientOptions = new AzureOpenAIClientOptions
+            var clientOptions = new OpenAIClientOptions
             {
+                Endpoint = ResolveOpenAIEndpoint(options.Endpoint),
+
                 // Polly owns retry. See the remarks above.
                 RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
 
@@ -364,14 +386,17 @@ public static class InfrastructureServiceRegistration
                 NetworkTimeout = TimeSpan.FromSeconds(100),
             };
 
-            return new AzureOpenAIClient(ResolveEndpoint(options.Endpoint), credential, clientOptions);
+            return new OpenAIClient(
+                new BearerTokenPolicy(credential, CognitiveServicesScope),
+                clientOptions);
         });
 
         // Derived from the parent client so both share one pipeline, one
-        // credential, and one token cache. The deployment name is bound here so
-        // that no other type needs to know it.
+        // credential, and one token cache. On the v1 endpoint the model name is
+        // the deployment name. It is bound here so that no other type needs to
+        // know it.
         services.AddSingleton(provider =>
-            provider.GetRequiredService<AzureOpenAIClient>()
+            provider.GetRequiredService<OpenAIClient>()
                 .GetEmbeddingClient(options.EmbeddingDeploymentName));
 
         services.AddSingleton<IEmbeddingService, AzureOpenAIEmbeddingService>();
@@ -380,7 +405,7 @@ public static class InfrastructureServiceRegistration
         // pipeline, one credential, and one token cache. The deployment name is
         // bound here so no other type needs to know it.
         services.AddSingleton(provider =>
-            provider.GetRequiredService<AzureOpenAIClient>()
+            provider.GetRequiredService<OpenAIClient>()
                 .GetChatClient(options.ChatDeploymentName));
 
         services.AddSingleton<IChatService, AzureOpenAIChatService>();
@@ -425,7 +450,7 @@ public static class InfrastructureServiceRegistration
     private static IServiceCollection AddFoundryAgent(
         this IServiceCollection services,
         IConfiguration configuration,
-        DefaultAzureCredential credential)
+        TokenCredential credential)
     {
         services
             .AddOptions<FoundryAgentOptions>()
@@ -446,10 +471,15 @@ public static class InfrastructureServiceRegistration
         // once, here, rather than at each use: whether a deployment separates its
         // agent model from its chat model is a fact about the deployment, not
         // about any individual question.
-        Uri projectEndpoint = ResolveEndpoint(
-            string.IsNullOrWhiteSpace(agentOptions.ProjectEndpoint)
-                ? openAIOptions.Endpoint
-                : agentOptions.ProjectEndpoint);
+        // Requires a pinned version outside Development. ValidateOnStart above
+        // runs it too.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<FoundryAgentOptions>, FoundryAgentOptionsValidator>());
+
+        // No fallback to the account endpoint: it answers 404 to the agent API
+        // (observed against a live single-project account), so an empty value is
+        // a startup failure instead — see FoundryAgentOptions.ProjectEndpoint.
+        Uri projectEndpoint = ResolveEndpoint(agentOptions.ProjectEndpoint);
 
         string modelDeploymentName = string.IsNullOrWhiteSpace(agentOptions.ModelDeploymentName)
             ? openAIOptions.ChatDeploymentName
@@ -536,6 +566,25 @@ public static class InfrastructureServiceRegistration
     /// rather than through a <see cref="UriFormatException"/> raised deep inside
     /// service registration with no indication of the cause.
     /// </remarks>
+    /// <summary>
+    /// The Entra ID scope for Azure OpenAI data-plane calls, on either the
+    /// <c>services.ai.azure.com</c> or <c>openai.azure.com</c> host.
+    /// </summary>
+    private const string CognitiveServicesScope = "https://cognitiveservices.azure.com/.default";
+
+    /// <summary>
+    /// Appends the v1 path to the configured resource endpoint, which stays the
+    /// bare resource URL in configuration so one value serves every client.
+    /// </summary>
+    private static Uri ResolveOpenAIEndpoint(string configuredEndpoint)
+    {
+        Uri endpoint = ResolveEndpoint(configuredEndpoint);
+
+        string root = endpoint.AbsoluteUri.EndsWith('/') ? endpoint.AbsoluteUri : endpoint.AbsoluteUri + "/";
+
+        return new Uri(new Uri(root), "openai/v1/");
+    }
+
     private static Uri ResolveServiceUri(BlobStorageOptions options) =>
         ResolveEndpoint(options.ServiceUri);
 
