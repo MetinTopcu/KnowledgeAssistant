@@ -568,13 +568,22 @@ APP_ID=$(az ad app create --display-name $APP_NAME --query appId -o tsv)
 az ad sp create --id $APP_ID
 
 # 2. The federated credential: who may act as this identity, and from where.
-#    The subject must match GitHub's token exactly. For a branch push it is
-#    `repo:<owner>/<repo>:ref:refs/heads/<branch>` — a tag, a pull request, or
-#    an environment each have a different subject and need their own credential.
+#    The subject must match GitHub's token exactly. For a branch push on this
+#    repository GitHub issues the ID-pinned form
+#    `repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/heads/<branch>`, which
+#    no other repository can ever present — not even one created later under
+#    the same name. (Older repositories may still issue the name-only form
+#    `repo:<owner>/<repo>:ref:refs/heads/<branch>`.) If unsure, run the
+#    workflow once: a mismatch fails with AADSTS700213 and prints the exact
+#    subject GitHub sent. A tag, a pull request, or an environment each have a
+#    different subject and need their own credential.
+#    Both ids: `gh api repos/$REPO --jq '.owner.id, .id'`.
+OWNER_ID=<owner-id>                # 70098939 for MetinTopcu
+REPO_ID=<repository-id>            # 1319174707 for KnowledgeAssistant
 az ad app federated-credential create --id $APP_ID --parameters "{
   \"name\": \"github-$BRANCH\",
   \"issuer\": \"https://token.actions.githubusercontent.com\",
-  \"subject\": \"repo:$REPO:ref:refs/heads/$BRANCH\",
+  \"subject\": \"repo:${REPO%%/*}@$OWNER_ID/${REPO#*/}@$REPO_ID:ref:refs/heads/$BRANCH\",
   \"audiences\": [\"api://AzureADTokenExchange\"]
 }"
 
