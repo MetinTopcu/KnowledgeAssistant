@@ -95,7 +95,10 @@ public sealed class DocumentsController : ControllerBase
         // attacker-controlled, and some clients legitimately send a full client-side
         // path. Sanitising at the boundary means no inner layer has to remember that
         // this value is hostile, and the name echoed back in the response cannot
-        // carry a traversal sequence.
+        // carry a traversal sequence. Backslashes are turned into forward slashes
+        // first: on Linux — where the container runs — Path.GetFileName treats
+        // only '/' as a separator, so a Windows-style "..\..\x.pdf" would
+        // otherwise pass through untouched.
         //
         // The stream is opened here and disposed here. Stream.Null stands in when
         // no file was sent: the validator rejects that command before the handler
@@ -105,7 +108,7 @@ public sealed class DocumentsController : ControllerBase
         await using Stream content = file?.OpenReadStream() ?? Stream.Null;
 
         var command = new UploadDocumentCommand(
-            FileName: file is null ? string.Empty : Path.GetFileName(file.FileName),
+            FileName: file is null ? string.Empty : Path.GetFileName(file.FileName.Replace('\\', '/')),
             ContentType: file?.ContentType ?? string.Empty,
             SizeInBytes: file?.Length ?? 0,
             Content: content);
